@@ -1,7 +1,7 @@
 /* EV Charge Log - PWA frontend (vanilla JS, no build step). */
 'use strict';
 
-const VERSION = '1.0.0';
+const VERSION = '1.1.0';
 
 /* ------------------------------------------------------------------ */
 /* Constants                                                           */
@@ -180,7 +180,11 @@ async function api(action, params) {
 }
 
 function normalizeItem(it) {
-  return Object.assign({}, it, { app: canonicalApp(it.app) });
+  let date = String(it.date || '');
+  // Sheets in Thai locale can return Buddhist-era years (e.g. 2569-09-12).
+  const y = Number(date.slice(0, 4));
+  if (y > 2400) date = (y - 543) + date.slice(4);
+  return Object.assign({}, it, { date: date, app: canonicalApp(it.app) });
 }
 
 function persist() {
@@ -198,7 +202,7 @@ async function sync(silent) {
     S.car = data.car || {};
     persist();
     if (!silent) toast('อัปเดตข้อมูลแล้ว');
-    route();
+    if (!F) routeNow(); // don't wipe a form that is being filled in
   } catch (err) {
     toast(err.message, true);
   } finally {
@@ -353,7 +357,29 @@ function setTabs(active) {
 function view(html) {
   const v = $('#view');
   v.innerHTML = html;
+  const page = v.firstElementChild;
+  if (page && S.animate) page.classList.add('enter');
+  S.animate = false;
   return v;
+}
+
+const reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/** Animates a money value inside el (big-number style). */
+function countUp(el, to, ms) {
+  if (!el) return;
+  const from = Number(el.dataset.v || 0);
+  el.dataset.v = to;
+  if (reduceMotion || from === to) { el.innerHTML = bigMoney(to); return; }
+  const start = performance.now();
+  const dur = ms || 600;
+  const tick = (t) => {
+    const p = Math.min(1, (t - start) / dur);
+    const e = 1 - Math.pow(1 - p, 3);
+    el.innerHTML = bigMoney(from + (to - from) * e);
+    if (p < 1 && el.isConnected) requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
 }
 
 /* ------------------------------------------------------------------ */
@@ -386,7 +412,7 @@ function renderHome() {
   const listHtml = shown.map((g) => `
     <section class="sec">
       <div class="month-hd"><h2>${g.key === '0000-00' ? 'ไม่ระบุวันที่' : monthLabel(g.key)}</h2><span>${money(g.total)}</span></div>
-      <div class="card tight">${g.items.map(itemRow).join('')}</div>
+      <div class="card tight">${g.items.map((it, i) => itemRow(it, i)).join('')}</div>
     </section>`).join('');
 
   view(`<div class="page">
@@ -406,13 +432,13 @@ function renderHome() {
       <div class="row-between"><div class="label" style="font-size:15px">ใช้ไปเดือนนี้</div><div class="link" style="color:var(--text2)">ดูสรุป ${icon('right', '#98989F', 14, 2.5)}</div></div>
       <div class="row-between" style="align-items:flex-end">
         <div style="display:flex;flex-direction:column;gap:8px">
-          <div class="big">${bigMoney(t.cost)}</div>
+          <div class="big" id="home-total">${bigMoney(0)}</div>
           <div class="meta" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
             ${delta !== null ? `<span class="tag">${delta >= 0 ? '+' : ''}${delta.toFixed(1)}%</span><span>จากเดือนก่อน ·</span>` : ''}
             <span>${t.n} ครั้ง · ${fmt(t.kwh, 1)} kWh</span>
           </div>
         </div>
-        <div class="sparks">${spark.map((v, i) => `<i class="${i === 5 ? 'on' : ''}" style="height:${Math.max(4, Math.round((v / maxSpark) * 56))}px"></i>`).join('')}</div>
+        <div class="sparks">${spark.map((v, i) => `<i class="${i === 5 ? 'on' : ''}" style="--i:${i};height:${Math.max(4, Math.round((v / maxSpark) * 56))}px"></i>`).join('')}</div>
       </div>
     </a>
     ${!S.items.length ? (S.syncing || S.cfg.url ? '<div class="loading"><div class="spinner"></div>กำลังโหลด…</div>' : '') : ''}
@@ -421,6 +447,10 @@ function renderHome() {
   </div>`);
 
   updateSyncBtn();
+  const ht = $('#home-total');
+  if (S.homeTotalShown === t.cost) ht.innerHTML = bigMoney(t.cost);
+  else countUp(ht, t.cost, 800);
+  S.homeTotalShown = t.cost;
   $('#sync-btn').addEventListener('click', () => sync());
   $('#search-btn').addEventListener('click', () => {
     const box = $('#search-box');
@@ -441,9 +471,9 @@ function renderHome() {
   if (more) more.addEventListener('click', () => { S.homeMonths += 3; renderHome(); });
 }
 
-function itemRow(it) {
+function itemRow(it, i) {
   const sub = [thaiShort(it.date), it.time, it.kwh ? fmt(it.kwh, 1) + ' kWh' : '', it.station].filter(Boolean).join(' · ');
-  return `<a class="item" href="#/item/${encodeURIComponent(it.id)}">
+  return `<a class="item" style="--i:${Math.min(i || 0, 12)}" href="#/item/${encodeURIComponent(it.id)}">
     ${logoHtml(it.app)}
     <div class="body"><div class="txt"><div class="name">${esc(it.app)}</div><div class="meta" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(sub)}</div></div>
     <div class="amt">${money(it.cost)}</div></div>
@@ -848,7 +878,7 @@ function renderDetail(id) {
     <div class="hero">
       ${logoHtml(it.app)}
       <div class="app">${esc(it.app)}</div>
-      <div class="big">${bigMoney(it.cost)}</div>
+      <div class="big" id="detail-total">${bigMoney(0)}</div>
       <div class="meta" style="font-size:15px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:center">${thaiLong(it.date)}${it.time ? ' · ' + esc(it.time) : ''} ${peakBadge(peak)}</div>
     </div>
     <div class="tiles">
@@ -863,6 +893,7 @@ function renderDetail(id) {
     <button class="secondary danger" id="del">ลบรายการ</button>
   </div>`);
 
+  countUp($('#detail-total'), it.cost, 600);
   $$('.pic').forEach((b) => {
     const img = $('img', b);
     loadImage(b.dataset.path, 500).then((src) => { img.src = src; img.hidden = false; $('.spinner', b) && $('.spinner', b).remove(); })
@@ -894,99 +925,87 @@ function picTile(path, title) {
 /* Insights                                                            */
 /* ------------------------------------------------------------------ */
 
+function periodKeys(mode) {
+  const dates = S.items.map((i) => i.date).filter(Boolean).sort();
+  const now = monthKey(todayISO());
+  const first = dates.length ? monthKey(dates[0]) : now;
+  const keys = [];
+  if (mode === 'year') {
+    for (let y = Number(first.slice(0, 4)); y <= Number(now.slice(0, 4)); y++) keys.push(String(y));
+  } else {
+    for (let k = first; k <= now; k = shiftMonth(k, 1)) keys.push(k);
+  }
+  return keys;
+}
+
+function periodData(mode, key) {
+  const items = S.items.filter((i) => (mode === 'year' ? String(i.date).slice(0, 4) === key : monthKey(i.date) === key));
+  const cost = items.reduce((a, i) => a + (i.cost || 0), 0);
+  const kwh = items.reduce((a, i) => a + (i.kwh || 0), 0);
+  return { items, cost, kwh, n: items.length };
+}
+
 function renderInsights() {
   setTabs('insights');
   const I = S.insights;
-  const totals = monthTotals();
-  const keys = Object.keys(totals).sort();
-  if (!I.key) I.key = keys.includes(monthKey(todayISO())) ? monthKey(todayISO()) : (keys[keys.length - 1] || monthKey(todayISO()));
+  const keys = periodKeys(I.mode);
+  const selKey = I.mode === 'year' ? (I.key || '').slice(0, 4) : (I.key || '').slice(0, 7);
+  if (!keys.includes(selKey)) I.key = keys[keys.length - 1];
+  else I.key = selKey;
 
-  let title, total, meta, bars, periodItems;
-  if (I.mode === 'month') {
-    const t = totals[I.key] || { cost: 0, kwh: 0, n: 0 };
-    const p = totals[shiftMonth(I.key, -1)];
-    const d = p && p.cost ? ((t.cost - p.cost) / p.cost) * 100 : null;
-    title = monthLabel(I.key);
-    total = t.cost;
-    meta = `${t.n} ครั้ง · ${fmt(t.kwh, 1)} kWh${d !== null ? ` · ${d >= 0 ? '+' : ''}${d.toFixed(1)}% จากเดือนก่อน` : ''}`;
-    bars = [];
-    for (let i = 5; i >= 0; i--) {
-      const k = shiftMonth(I.key, -i);
-      bars.push({ key: k, label: TH_MONTH_SHORT[Number(k.slice(5)) - 1], v: (totals[k] || {}).cost || 0, on: k === I.key });
-    }
-    periodItems = S.items.filter((i) => monthKey(i.date) === I.key);
-  } else {
-    const y = I.key.slice(0, 4);
-    bars = [];
-    total = 0;
-    let n = 0, kwh = 0;
-    for (let m = 1; m <= 12; m++) {
-      const k = y + '-' + pad(m);
-      const t = totals[k] || { cost: 0, n: 0, kwh: 0 };
-      total += t.cost; n += t.n; kwh += t.kwh;
-      bars.push({ key: k, label: TH_MONTH_SHORT[m - 1].replace('.', '').slice(0, 3), v: t.cost, on: k === I.key });
-    }
-    title = 'ปี ' + y;
-    meta = `${n} ครั้ง · ${fmt(kwh, 1)} kWh`;
-    periodItems = S.items.filter((i) => String(i.date).slice(0, 4) === y);
-  }
-  const maxBar = Math.max.apply(null, bars.map((b) => b.v).concat([1]));
-  const pr = rateStats(periodItems);
-  const cons = consumption();
+  const vals = keys.map((k) => periodData(I.mode, k).cost);
+  const maxV = Math.max.apply(null, vals.concat([1]));
+  const cols = keys.map((k, idx) => {
+    const m = I.mode === 'year' ? null : Number(k.slice(5));
+    const label = I.mode === 'year' ? k : TH_MONTH_SHORT[m - 1];
+    const sub = I.mode === 'year' ? '' : (m === 1 || idx === 0 ? k.slice(0, 4) : '');
+    const h = Math.max(4, Math.round((vals[idx] / maxV) * 140));
+    return `<button class="col" data-key="${k}" aria-label="${I.mode === 'year' ? 'ปี ' + k : monthLabel(k)} ${money(vals[idx])}">
+      <span class="v">${vals[idx] >= 1000 ? '฿' + fmt(vals[idx] / 1000, 1) + 'k' : '฿' + Math.round(vals[idx])}</span>
+      <span class="b" style="--h:${h}px"></span>
+      <span class="l">${label}<small>${sub}</small></span></button>`;
+  }).join('');
 
-  // App ranking (all time)
+  // All-time cards (do not change with the selected period)
   const byApp = {};
   S.items.forEach((i) => { (byApp[i.app] = byApp[i.app] || []).push(i); });
   const rank = Object.keys(byApp).map((a) => Object.assign({ app: a }, rateStats(byApp[a]))).filter((r) => r.rate != null).sort((a, b) => a.rate - b.rate);
   const maxRate = rank.length ? rank[rank.length - 1].rate : 1;
   const shownRank = I.allApps ? rank : rank.slice(0, 6);
-
-  // Peak split (all time, needs time)
   const on = rateStats(S.items.filter((i) => peakOf(i.date, i.time) === 'on'));
   const off = rateStats(S.items.filter((i) => peakOf(i.date, i.time) === 'off'));
   const peakKwh = on.kwh + off.kwh;
-
   const stations = stationGroups().filter((s) => s.rate != null).sort((a, b) => a.rate - b.rate).slice(0, 5);
 
   view(`<div class="page">
     <div class="hdr"><h1>สรุป</h1></div>
     <div class="seg" role="group" aria-label="ช่วงเวลา">
+      <span class="seg-thumb" style="transform:translateX(${I.mode === 'year' ? '100%' : '0'})"></span>
       <button class="${I.mode === 'month' ? 'on' : ''}" data-mode="month" aria-pressed="${I.mode === 'month'}">รายเดือน</button>
       <button class="${I.mode === 'year' ? 'on' : ''}" data-mode="year" aria-pressed="${I.mode === 'year'}">รายปี</button>
     </div>
+
     <div class="card">
-      <div class="monthnav">
-        <button class="circle" id="prev" aria-label="ก่อนหน้า" style="background:var(--card2)">${icon('left', '#fff', 18, 2.5)}</button>
-        <div style="font-size:15px;font-weight:600">${title}</div>
-        <button class="circle" id="next" aria-label="ถัดไป" style="background:var(--card2)">${icon('right', '#fff', 18, 2.5)}</button>
-      </div>
       <div style="display:flex;flex-direction:column;gap:6px">
-        <div class="big">${bigMoney(total)}</div>
-        <div class="meta">${meta}</div>
+        <div class="label" style="font-size:15px" id="ins-title"></div>
+        <div class="big" id="ins-total"></div>
+        <div class="meta" id="ins-meta"></div>
       </div>
-      <div class="bars">${bars.map((b) => `<button data-key="${b.key}" class="${b.on ? 'on' : ''}" aria-label="${monthLabel(b.key)} ${money(b.v)}">
-        <span class="v">${b.v ? (b.v >= 1000 ? '฿' + (b.v / 1000).toFixed(1) + 'k' : '฿' + Math.round(b.v)) : ''}</span>
-        <span class="b" style="height:${Math.round((b.v / maxBar) * 130)}px"></span></button>`).join('')}</div>
-      <div class="bar-labels">${bars.map((b) => `<span>${b.label}</span>`).join('')}</div>
+      <div class="chart" id="chart">${cols}</div>
     </div>
 
     <section class="sec">
-      <div class="tiles two">
-        <div class="tile"><div class="k">อัตราสิ้นเปลือง</div><div class="n">${cons ? fmt(cons.per100, 1) : '–'}<small> kWh/100กม.</small></div></div>
-        <div class="tile"><div class="k">ต้นทุนต่อกิโล</div><div class="n">${cons ? fmt(cons.perKm) : '–'}<small> ฿/กม.</small></div></div>
-        <div class="tile"><div class="k">ราคาเฉลี่ย</div><div class="n">${pr.rate != null ? fmt(pr.rate) : '–'}<small> ฿/kWh</small></div></div>
-        <div class="tile"><div class="k">เฉลี่ยต่อครั้ง</div><div class="n">${periodItems.length ? money(periodItems.reduce((a, i) => a + (i.cost || 0), 0) / periodItems.length) : '–'}</div></div>
-      </div>
-      <div class="meta" style="font-size:12px;padding:0 4px">${cons ? `สิ้นเปลืองและต้นทุนต่อกิโล คิดจากช่วงที่มีเลขไมล์ (${thaiShort(cons.from)} – ${thaiShort(cons.to)}) ${fmt(cons.dist, 0)} กม. · kWh ตามแอป รวม loss ที่ตู้` : 'ต้องมีเลขไมล์อย่างน้อย 2 รายการเพื่อคำนวณอัตราสิ้นเปลือง'} · ราคาเฉลี่ยและต่อครั้งเป็นของ${I.mode === 'month' ? 'เดือน' : 'ปี'}ที่เลือก</div>
+      <div class="tiles two" id="ins-kpi"></div>
+      <div class="meta" style="font-size:12px;padding:0 4px;line-height:1.5" id="ins-note"></div>
     </section>
 
     <div class="card">
       <div class="row-between"><h2>แอปไหนคุ้มสุด</h2><span class="meta">฿ ต่อ kWh · ทั้งหมด</span></div>
-      ${shownRank.length ? shownRank.map((r, i) => `<div class="rank">
-        <div class="no">${i + 1}</div>${logoHtml(r.app)}
+      ${shownRank.length ? shownRank.map((r, i) => `<div class="rank" style="--i:${i}">
+        <div class="no">${i + 1}</div>${logoHtml(r.app, 'logo', 36)}
         <div class="main">
           <div class="row-between" style="font-size:15px;font-weight:600"><span>${esc(r.app)}</span><span style="color:${i === 0 ? 'var(--green)' : '#fff'}">฿${fmt(r.rate)}</span></div>
-          <div class="meter"><i class="${i === 0 ? 'best' : ''}" style="width:${Math.round((r.rate / maxRate) * 100)}%"></i></div>
+          <div class="meter"><i class="${i === 0 ? 'best' : ''}" style="--w:${Math.round((r.rate / maxRate) * 100)}%"></i></div>
           <div class="meta" style="font-size:12px">${r.n} ครั้ง · ${fmt(r.kwh, 0)} kWh · ${money(r.cost)}</div>
         </div></div>`).join('') : '<div class="empty">ยังไม่มีข้อมูล kWh</div>'}
       ${rank.length > 6 ? `<button class="secondary" id="allapps" style="background:var(--card2);height:44px;font-size:15px;font-weight:600">${I.allApps ? 'แสดงน้อยลง' : 'ดูทั้งหมด ' + rank.length + ' แอป'}</button>` : ''}
@@ -999,30 +1018,91 @@ function renderInsights() {
           <div class="peakbox"><span class="badge off" style="align-self:flex-start">OFF-PEAK</span><div class="n">${off.rate != null ? fmt(off.rate) : '–'}<small> ฿/kWh</small></div><div class="meta" style="font-size:12px">${off.n} ครั้ง · ${Math.round((off.kwh / peakKwh) * 100)}% ของ kWh</div></div>
           <div class="peakbox"><span class="badge on" style="align-self:flex-start">ON-PEAK</span><div class="n">${on.rate != null ? fmt(on.rate) : '–'}<small> ฿/kWh</small></div><div class="meta" style="font-size:12px">${on.n} ครั้ง · ${Math.round((on.kwh / peakKwh) * 100)}% ของ kWh</div></div>
         </div>
-        <div class="split"><i style="width:${(off.kwh / peakKwh) * 100}%;background:var(--cyan)"></i><i style="flex-grow:1;background:var(--orange)"></i></div>
+        <div class="split"><i style="--w:${(off.kwh / peakKwh) * 100}%;background:var(--cyan)"></i><i style="flex-grow:1;background:var(--orange)"></i></div>
         <div class="meta" style="line-height:1.5">${on.rate && off.rate && on.rate > off.rate ? `ถ้าย้ายไปชาร์จช่วง Off-Peak ทั้งหมด จะประหยัดได้ประมาณ ${money((on.rate - off.rate) * on.kwh)} · ` : ''}On-Peak = จ.–ศ. 09:00–22:00 (ยังไม่หักวันหยุดนักขัตฤกษ์)</div>`
     : '<div class="empty">ยังไม่มีข้อมูลเวลาชาร์จ<br>จะเริ่มแยกให้เมื่อบันทึกรายการใหม่ที่มีเวลา</div>'}
     </div>
 
     <a class="card" href="#/map">
       <div class="row-between"><h2>สถานีที่คุ้มสุด</h2>${icon('right', '#98989F', 18, 2.5)}</div>
-      ${stations.length ? stations.map((s) => `<div class="rank">${logoHtml(s.app, 'logo', 32)}
+      ${stations.length ? stations.map((s, i) => `<div class="rank" style="--i:${i}">${logoHtml(s.app, 'logo', 32)}
         <div class="main" style="gap:1px"><div style="font-size:15px;font-weight:600">${esc(s.name)}</div><div class="meta" style="font-size:12px">${s.visits} ครั้ง · ล่าสุด ${thaiShort(s.last)}</div></div>
         <div style="font-size:15px;font-weight:700">฿${fmt(s.rate)}</div></div>`).join('')
     : '<div class="empty">ยังไม่มีข้อมูลสถานี<br>ใส่ชื่อสถานีตอนบันทึก แล้วจะเห็นการเปรียบเทียบตรงนี้</div>'}
     </a>
   </div>`);
 
-  $$('.seg button').forEach((b) => b.addEventListener('click', () => { I.mode = b.dataset.mode; renderInsights(); }));
-  $('#prev').addEventListener('click', () => { I.key = I.mode === 'month' ? shiftMonth(I.key, -1) : shiftMonth(I.key, -12); renderInsights(); });
-  $('#next').addEventListener('click', () => { I.key = I.mode === 'month' ? shiftMonth(I.key, 1) : shiftMonth(I.key, 12); renderInsights(); });
-  $$('.bars button').forEach((b) => b.addEventListener('click', () => { I.key = b.dataset.key; I.mode = 'month'; renderInsights(); }));
+  const chart = $('#chart');
+  updateInsightPeriod(true);
+  // Start with the selected bar in view (no animation on first paint).
+  const sel = $('.col.on', chart);
+  if (sel) chart.scrollLeft = sel.offsetLeft - chart.clientWidth + sel.offsetWidth + 24;
+  requestAnimationFrame(() => chart.classList.add('grown'));
+
+  $$('.col', chart).forEach((b) => b.addEventListener('click', () => {
+    if (I.key === b.dataset.key) return;
+    I.key = b.dataset.key;
+    updateInsightPeriod(false);
+    const left = b.offsetLeft - (chart.clientWidth - b.offsetWidth) / 2;
+    chart.scrollTo({ left: left, behavior: 'smooth' });
+  }));
+  $$('.seg button').forEach((b) => b.addEventListener('click', () => {
+    if (I.mode === b.dataset.mode) return;
+    I.mode = b.dataset.mode;
+    I.key = I.mode === 'year' ? I.key.slice(0, 4) : (I.key.length === 4 ? (I.key === monthKey(todayISO()).slice(0, 4) ? monthKey(todayISO()) : I.key + '-12') : I.key);
+    $('.seg-thumb').style.transform = 'translateX(' + (I.mode === 'year' ? '100%' : '0') + ')';
+    const y = window.scrollY;
+    setTimeout(() => { renderInsights(); window.scrollTo(0, y); }, 180);
+  }));
   const all = $('#allapps');
-  if (all) all.addEventListener('click', () => { I.allApps = !I.allApps; renderInsights(); });
+  if (all) all.addEventListener('click', () => {
+    const y = window.scrollY;
+    I.allApps = !I.allApps;
+    renderInsights();
+    window.scrollTo(0, y);
+  });
+}
+
+/** Updates the numbers that depend on the selected period, without rebuilding the page. */
+function updateInsightPeriod(first) {
+  const I = S.insights;
+  const d = periodData(I.mode, I.key);
+  let title, meta;
+  if (I.mode === 'month') {
+    const p = periodData('month', shiftMonth(I.key, -1));
+    const delta = p.cost ? ((d.cost - p.cost) / p.cost) * 100 : null;
+    title = monthLabel(I.key);
+    meta = `${d.n} ครั้ง · ${fmt(d.kwh, 1)} kWh${delta !== null ? ` · ${delta >= 0 ? '+' : ''}${delta.toFixed(1)}% จากเดือนก่อน` : ''}`;
+  } else {
+    const p = periodData('year', String(Number(I.key) - 1));
+    const delta = p.cost ? ((d.cost - p.cost) / p.cost) * 100 : null;
+    title = 'ปี ' + I.key;
+    meta = `${d.n} ครั้ง · ${fmt(d.kwh, 1)} kWh${delta !== null ? ` · ${delta >= 0 ? '+' : ''}${delta.toFixed(1)}% จากปีก่อน` : ''}`;
+  }
+  const pr = rateStats(d.items);
+  const cons = consumption();
+  $('#ins-title').textContent = title;
+  $('#ins-meta').textContent = meta;
+  countUp($('#ins-total'), d.cost, first ? 700 : 450);
+  $$('#chart .col').forEach((c) => {
+    const on = c.dataset.key === I.key;
+    c.classList.toggle('on', on);
+    c.setAttribute('aria-pressed', on);
+  });
+  const kpi = $('#ins-kpi');
+  kpi.innerHTML = `
+    <div class="tile"><div class="k">อัตราสิ้นเปลือง</div><div class="n">${cons ? fmt(cons.per100, 1) : '–'}<small> kWh/100กม.</small></div></div>
+    <div class="tile"><div class="k">ต้นทุนต่อกิโล</div><div class="n">${cons ? fmt(cons.perKm) : '–'}<small> ฿/กม.</small></div></div>
+    <div class="tile"><div class="k">ราคาเฉลี่ย</div><div class="n swap">${pr.rate != null ? fmt(pr.rate) : '–'}<small> ฿/kWh</small></div></div>
+    <div class="tile"><div class="k">เฉลี่ยต่อครั้ง</div><div class="n swap">${d.n ? money(d.cost / d.n) : '–'}</div></div>`;
+  $('#ins-note').textContent = (cons
+    ? `สิ้นเปลืองและต้นทุนต่อกิโล คิดจากช่วงที่มีเลขไมล์ (${thaiShort(cons.from)} – ${thaiShort(cons.to)}) ${fmt(cons.dist, 0)} กม. · kWh ตามแอป รวม loss ที่ตู้`
+    : 'ต้องมีเลขไมล์อย่างน้อย 2 รายการเพื่อคำนวณอัตราสิ้นเปลือง')
+    + ` · ราคาเฉลี่ยและต่อครั้งเป็นของ${I.mode === 'month' ? 'เดือน' : 'ปี'}ที่เลือก`;
 }
 
 /* ------------------------------------------------------------------ */
-/* Map (Leaflet + OpenStreetMap/CARTO tiles)                           */
+/* Map (Leaflet + OpenStreetMap tiles, darkened with CSS)             */
 /* ------------------------------------------------------------------ */
 
 let leafletReady = null;
@@ -1072,8 +1152,8 @@ function renderMap() {
     if (!$('#map')) return;
     if (mapObj) { mapObj.remove(); mapObj = null; }
     mapObj = L.map('map', { zoomControl: false, attributionControl: false }).setView([13.7563, 100.5018], 11);
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-      maxZoom: 19, subdomains: 'abcd', attribution: '&copy; OpenStreetMap &copy; CARTO',
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19, attribution: '&copy; OpenStreetMap contributors', className: 'dark-tiles',
     }).addTo(mapObj);
     L.control.attribution({ position: 'topright', prefix: false }).addTo(mapObj);
     if (!all.length) return;
@@ -1302,7 +1382,19 @@ function renderSettings() {
 /* Router                                                              */
 /* ------------------------------------------------------------------ */
 
+let firstRoute = true;
 function route() {
+  S.animate = true;
+  if (!firstRoute && document.startViewTransition && !reduceMotion) {
+    firstRoute = false;
+    document.startViewTransition(() => routeNow());
+    return;
+  }
+  firstRoute = false;
+  routeNow();
+}
+
+function routeNow() {
   const raw = location.hash.replace(/^#/, '') || '/';
   const [path, qs] = raw.split('?');
   const query = new URLSearchParams(qs || location.search.slice(1));

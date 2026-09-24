@@ -1,5 +1,5 @@
 /* Service worker: offline app shell + Android share target. */
-const VERSION = 'v1.0.0';
+const VERSION = 'v1.1.0';
 const SHELL = [
   './', 'index.html', 'styles.css', 'app.js', 'parse.js', 'manifest.webmanifest',
   'icons/app-192.png', 'icons/app-512.png',

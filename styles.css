@@ -255,3 +255,84 @@ img { display: block; }
 .toast.err { background: #5C1F1C; }
 .loading { display: flex; align-items: center; justify-content: center; gap: 10px; color: var(--text2); padding: 40px 0; }
 .leaflet-top.leaflet-right { top: calc(var(--safe-top) + 124px); }
+
+/* ------------------------------------------------------------------ */
+/* Motion                                                              */
+/* ------------------------------------------------------------------ */
+@keyframes rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes grow { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+@keyframes fillw { from { width: 0; } }
+@keyframes pop { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@keyframes slideup { from { opacity: 0; transform: translateY(30px); } to { opacity: 1; transform: none; } }
+@keyframes drop { from { opacity: 0; transform: translate(-50%, -16px); } to { opacity: 1; transform: translate(-50%, 0); } }
+
+.page.enter > * { animation: rise 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+.page.enter > *:nth-child(2) { animation-delay: 40ms; }
+.page.enter > *:nth-child(3) { animation-delay: 80ms; }
+.page.enter > *:nth-child(4) { animation-delay: 120ms; }
+.page.enter > *:nth-child(5) { animation-delay: 160ms; }
+.page.enter > *:nth-child(6) { animation-delay: 200ms; }
+.page.enter > *:nth-child(n+7) { animation-delay: 240ms; }
+.page.enter .item, .page.enter .rank { animation: rise 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) both; animation-delay: calc(160ms + var(--i, 0) * 35ms); }
+.page.enter .appbtn { animation: pop 0.4s ease both; }
+.sparks i { transform-origin: bottom; animation: grow 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) both; animation-delay: calc(200ms + var(--i, 0) * 60ms); }
+.meter i { width: var(--w); animation: fillw 0.9s cubic-bezier(0.2, 0.8, 0.2, 1) both; animation-delay: calc(250ms + var(--i, 0) * 40ms); }
+.split i { width: var(--w); animation: fillw 0.9s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+.tile .n.swap { animation: pop 0.35s ease both; }
+.hero .logo { animation: pop 0.5s ease both; }
+
+a, button, .photo, .chip { transition: transform 0.15s ease, background-color 0.2s ease, opacity 0.2s ease; }
+a:active, button:active, .photo:active { transform: scale(0.97); }
+.fab:active { transform: scale(0.92); }
+.appbtn .ic { transition: border-color 0.2s ease, transform 0.2s ease; }
+.appbtn.on .ic { transform: scale(1.04); }
+.appbtn .chk { transform: scale(0); transition: transform 0.25s cubic-bezier(0.3, 1.6, 0.5, 1); display: flex; }
+.appbtn.on .chk { transform: scale(1); }
+.tabs a { transition: background-color 0.25s ease, color 0.25s ease; }
+
+.toast:not([hidden]) { animation: drop 0.3s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+.modal-bg { animation: fade 0.2s ease both; }
+.modal { animation: slideup 0.3s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+.viewer { animation: fade 0.2s ease both; }
+.viewer img { animation: pop 0.3s ease both; }
+.sheet:not([hidden]) { animation: slideup 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+.other:not([hidden]) { animation: pop 0.3s ease both; }
+.photo .thumb img { animation: fade 0.3s ease both; }
+.pic img:not([hidden]) { animation: fade 0.3s ease both; }
+
+/* Page transitions (Chrome Android: View Transitions API) */
+#tabbar { view-transition-name: tabbar; }
+::view-transition-old(root) { animation: 160ms ease both fadeout; }
+::view-transition-new(root) { animation: 280ms cubic-bezier(0.2, 0.8, 0.2, 1) both fadein; }
+@keyframes fadeout { to { opacity: 0; } }
+@keyframes fadein { from { opacity: 0; transform: translateY(8px); } }
+
+/* Segmented control with sliding thumb */
+.seg { position: relative; }
+.seg button { position: relative; z-index: 1; transition: color 0.2s ease; }
+.seg button.on { background: transparent; }
+.seg-thumb { position: absolute; left: 3px; top: 3px; bottom: 3px; width: calc(50% - 3px); border-radius: 9px; background: var(--card3); transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1); }
+
+/* Scrollable bar chart */
+.chart { display: flex; gap: 10px; overflow-x: auto; overscroll-behavior-x: contain; scroll-snap-type: x proximity; margin: 0 -20px; padding: 0 20px 2px; scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 20px, #000 calc(100% - 20px), transparent 100%);
+          mask-image: linear-gradient(to right, transparent 0, #000 20px, #000 calc(100% - 20px), transparent 100%); }
+.chart::-webkit-scrollbar { display: none; }
+.chart .col { flex: 0 0 44px; height: 200px; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 6px; border: none; background: transparent; padding: 0; scroll-snap-align: center; }
+.chart .col .v { font-size: 11px; font-weight: 600; color: var(--text); opacity: 0; transform: translateY(4px); transition: opacity 0.25s ease, transform 0.25s ease; white-space: nowrap; }
+.chart .col.on .v { opacity: 1; transform: none; }
+.chart .col .b { width: 100%; height: 0; border-radius: 8px 8px 3px 3px; background: var(--card3); transition: height 0.7s cubic-bezier(0.2, 0.8, 0.2, 1), background-color 0.3s ease; }
+.chart.grown .col .b { height: var(--h); }
+.chart .col.on .b { background: var(--green); }
+.chart .col .l { font-size: 12px; color: var(--text2); height: 30px; display: flex; flex-direction: column; align-items: center; line-height: 1.2; border-top: 0.5px solid var(--sep); width: 100%; padding-top: 6px; }
+.chart .col .l small { font-size: 10px; color: var(--muted); }
+.chart .col.on .l { color: var(--text); font-weight: 600; }
+
+/* OSM tiles made dark */
+.dark-tiles { filter: invert(1) hue-rotate(180deg) brightness(0.85) contrast(0.9) saturate(0.6); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+  .chart .col .b { height: var(--h); }
+}
