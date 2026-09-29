@@ -1,7 +1,7 @@
 /* EV Charge Log - PWA frontend (vanilla JS, no build step). */
 'use strict';
 
-const VERSION = '1.4.0';
+const VERSION = '1.4.1';
 
 /* ------------------------------------------------------------------ */
 /* Constants                                                           */
@@ -23,6 +23,28 @@ const APPS = [
 const OTHER = 'อื่น ๆ';
 
 const TH_MONTH_SHORT = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
+
+/* Thai short date for pills, e.g. "12 ต.ค. 2569". Empty -> placeholder. */
+function thaiPillDate(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || '');
+  if (!m) return '<span class="ph">เลือกวันที่</span>';
+  return `${+m[3]} ${TH_MONTH_SHORT[+m[2] - 1]} ${+m[1] + 543}`;
+}
+/* Native date input hidden under a Thai-formatted pill (avoids mm/dd/yyyy). */
+function datePill(id, value, attrs = '') {
+  return `<span class="dpill"><span class="dtxt">${thaiPillDate(value)}</span><input id="${id}" type="date" value="${esc(value || '')}" ${attrs}></span>`;
+}
+function thaiPillTime(v) {
+  return /^\d{2}:\d{2}/.test(v || '') ? `${v.slice(0, 5)} น.` : '<span class="ph">เลือกเวลา</span>';
+}
+function timePill(id, value, attrs = '') {
+  return `<span class="dpill"><span class="dtxt">${thaiPillTime(value)}</span><input id="${id}" type="time" value="${esc(value || '')}" ${attrs}></span>`;
+}
+document.addEventListener('input', (e) => {
+  const t = e.target;
+  if (!t || !t.parentElement || !t.parentElement.classList.contains('dpill')) return;
+  t.parentElement.querySelector('.dtxt').innerHTML = t.type === 'time' ? thaiPillTime(t.value) : thaiPillDate(t.value);
+});
 const TH_MONTH_LONG = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
 const TH_DAY_SHORT = ['อา.', 'จ.', 'อ.', 'พ.', 'พฤ.', 'ศ.', 'ส.'];
 const TH_DAY_LONG = ['อาทิตย์', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์'];
@@ -431,11 +453,11 @@ function renderHome() {
     <a href="#/insights" class="card">
       <div class="row-between"><div class="label" style="font-size:15px">ใช้ไปเดือนนี้</div><div class="link" style="color:var(--text2)">ดูสรุป ${icon('right', '#98989F', 14, 2.5)}</div></div>
       <div class="row-between" style="align-items:flex-end">
-        <div style="display:flex;flex-direction:column;gap:8px">
+        <div class="sum-l">
           <div class="big" id="home-total">${bigMoney(0)}</div>
-          <div class="meta" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-            ${delta !== null ? `<span class="tag">${delta >= 0 ? '+' : ''}${delta.toFixed(1)}%</span><span>จากเดือนก่อน ·</span>` : ''}
-            <span>${t.n} ครั้ง · ${fmt(t.kwh, 1)} kWh</span>
+          <div class="meta sum-meta">
+            ${delta !== null ? `<span class="tag ${delta >= 0 ? 'up' : 'down'}">${delta >= 0 ? '+' : ''}${delta.toFixed(0)}%</span> <span>จากเดือนก่อน</span>` : ''}
+            <div class="sum-sub">${t.n} ครั้ง · ${fmt(t.kwh, 0)} kWh</div>
           </div>
         </div>
         <div class="sparks">${spark.map((v, i) => `<i class="${i === 5 ? 'on' : ''}" style="--i:${i};height:${Math.max(4, Math.round((v / maxSpark) * 56))}px"></i>`).join('')}</div>
@@ -583,8 +605,8 @@ function drawForm() {
     <section class="sec">
       <div class="sec-hd"><span class="label">รายละเอียด</span></div>
       <div class="group">
-        <div class="f"><div class="line"><label for="f-date">วันที่</label><input id="f-date" class="box" type="date" value="${esc(F.date)}" required></div></div>
-        <div class="f"><div class="line"><label for="f-time">เวลาเริ่มชาร์จ</label><input id="f-time" class="box" type="time" value="${esc(F.time)}"></div>
+        <div class="f"><div class="line"><label for="f-date">วันที่</label>${datePill('f-date', F.date, 'required')}</div></div>
+        <div class="f"><div class="line"><label for="f-time">เวลาเริ่มชาร์จ</label>${timePill('f-time', F.time)}</div>
           <div class="hint" id="peak-hint"></div></div>
         <div class="f"><div class="line"><label for="f-odo">เลขไมล์</label><div class="v"><input id="f-odo" inputmode="numeric" placeholder="0" value="${F.odo != null ? esc(F.odo) : ''}"><span class="u">กม.</span></div></div>
           <div class="hint" id="odo-hint"></div></div>
@@ -1356,13 +1378,13 @@ function renderCar() {
     <section class="sec">
       <div class="sec-hd"><span class="label">แจ้งเตือน</span></div>
       <div class="group">
-        <div class="f"><div class="line"><label for="c-svc" style="display:flex;gap:12px;align-items:center"><span class="rem-ic" style="background:#0A84FF">${icon('bell', '#fff', 16, 2.2)}</span>เช็กระยะที่</label>
+        <div class="f"><div class="line"><label for="c-svc" class="rem-lb"><span class="rem-ic" style="background:#0A84FF">${icon('bell', '#fff', 16, 2.2)}</span>เช็กระยะที่</label>
           <div class="v"><input id="c-svc" data-k="serviceKm" inputmode="numeric" value="${esc(c.serviceKm)}" placeholder="0" style="width:90px;font-weight:500"><span class="u">กม.</span></div></div>
           ${svcLeft != null ? `<span class="hint" style="${svcLeft < 0 ? 'color:var(--red)' : svcLeft <= 1000 ? 'color:var(--orange)' : ''}">${svcLeft < 0 ? 'เลยกำหนด ' + fmt(-svcLeft, 0) + ' กม.' : 'อีก ' + fmt(svcLeft, 0) + ' กม.'}</span>` : ''}</div>
-        <div class="f"><div class="line"><label for="c-tax" style="display:flex;gap:12px;align-items:center"><span class="rem-ic" style="background:#FF9F0A">${icon('bell', '#fff', 16, 2.2)}</span>ต่อภาษี / พ.ร.บ.</label>
-          <input id="c-tax" data-k="taxDate" class="box" type="date" value="${esc(c.taxDate)}"></div>${dueHint(daysTo(c.taxDate))}</div>
-        <div class="f"><div class="line"><label for="c-ins" style="display:flex;gap:12px;align-items:center"><span class="rem-ic" style="background:#BF5AF2">${icon('bell', '#fff', 16, 2.2)}</span>ต่อประกันภัย</label>
-          <input id="c-ins" data-k="insDate" class="box" type="date" value="${esc(c.insDate)}"></div>${dueHint(daysTo(c.insDate))}</div>
+        <div class="f"><div class="line"><label for="c-tax" class="rem-lb"><span class="rem-ic" style="background:#FF9F0A">${icon('bell', '#fff', 16, 2.2)}</span>ต่อภาษี / พ.ร.บ.</label>
+          ${datePill('c-tax', c.taxDate, 'data-k="taxDate"')}</div>${dueHint(daysTo(c.taxDate))}</div>
+        <div class="f"><div class="line"><label for="c-ins" class="rem-lb"><span class="rem-ic" style="background:#BF5AF2">${icon('bell', '#fff', 16, 2.2)}</span>ต่อประกันภัย</label>
+          ${datePill('c-ins', c.insDate, 'data-k="insDate"')}</div>${dueHint(daysTo(c.insDate))}</div>
       </div>
     </section>
     <button class="primary" id="car-save">บันทึกข้อมูลรถ</button>
