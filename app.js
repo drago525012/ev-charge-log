@@ -1,7 +1,7 @@
 /* EV Charge Log - PWA frontend (vanilla JS, no build step). */
 'use strict';
 
-const VERSION = '1.1.0';
+const VERSION = '1.4.0';
 
 /* ------------------------------------------------------------------ */
 /* Constants                                                           */
@@ -536,6 +536,7 @@ function drawForm() {
       <div class="sec-hd"><span class="label">รูปภาพ · อ่านข้อมูลให้อัตโนมัติ</span></div>
       <div class="photos">${photoSlot('receipt', 'ใบเสร็จ')}${photoSlot('car', 'หน้าจอรถ')}</div>
     </section>
+    ${candidatesHtml()}
 
     <div class="amount">
       <label for="f-cost" class="label" style="font-weight:600">ค่าใช้จ่าย</label>
@@ -569,11 +570,12 @@ function drawForm() {
           </div>
         </div>
         <div class="f" style="border-top:0.5px solid var(--sep)">
+          <div id="loc-line">${locLineHtml()}</div>
           <div class="chips">
-            <button class="chip" type="button" id="geo">${icon('nav', '#fff', 14, 2.2)}${isNum(F.lat) ? 'อัปเดตตำแหน่ง' : 'ใช้ตำแหน่งปัจจุบัน'}</button>
+            <button class="chip" type="button" id="loc-search">${icon('search', '#fff', 14, 2.2)}ค้นหาตำแหน่ง</button>
+            <button class="chip" type="button" id="geo">${icon('nav', '#fff', 14, 2.2)}ใช้ตำแหน่งปัจจุบัน</button>
             ${forApp.map((s, i) => `<button class="chip" type="button" data-st="${i}">${esc(s.name)}</button>`).join('')}
           </div>
-          <div class="hint ${isNum(F.lat) ? 'good' : ''}" id="geo-hint">${isNum(F.lat) ? 'บันทึกพิกัดแล้ว' + (F.geo ? ' (±' + Math.round(F.geo) + ' ม.)' : '') : ''}</div>
         </div>
       </div>
     </section>
@@ -634,7 +636,16 @@ function bindForm(stations, forApp) {
   bindNum('f-kwh', 'kwh');
   byId('f-date').addEventListener('input', (e) => { F.date = e.target.value; updateHints(); });
   byId('f-time').addEventListener('input', (e) => { F.time = e.target.value; updateHints(); });
-  byId('f-station').addEventListener('input', (e) => { F.station = e.target.value; delete F.auto.station; });
+  byId('f-station').addEventListener('input', (e) => {
+    F.station = e.target.value;
+    delete F.auto.station;
+    clearTimeout(F._locT);
+    F._locT = setTimeout(() => { attachKnownLocation(true); updateLocLine(); }, 400);
+  });
+  byId('loc-search').addEventListener('click', async () => {
+    const r = await openLocationPicker({ station: F.station, app: F.app, lat: F.lat, lng: F.lng });
+    if (r) { F.lat = r.lat; F.lng = r.lng; F.locLabel = r.label; F.locSrc = 'search'; F.geo = null; updateLocLine(); }
+  });
   byId('f-note').addEventListener('input', (e) => { F.note = e.target.value; });
 
   $$('.appbtn').forEach((b) => b.addEventListener('click', () => {
@@ -664,19 +675,21 @@ function bindForm(stations, forApp) {
   $$('[data-st]').forEach((c) => c.addEventListener('click', () => {
     const s = forApp[Number(c.dataset.st)];
     F.station = s.name;
-    if (isNum(s.lat)) { F.lat = s.lat; F.lng = s.lng; F.geo = null; }
+    if (isNum(s.lat)) { F.lat = s.lat; F.lng = s.lng; F.geo = null; F.locSrc = 'known'; F.locLabel = 'ตำแหน่งเดิมของสถานีนี้'; }
     drawForm();
   }));
   byId('geo').addEventListener('click', () => {
     if (!navigator.geolocation) { toast('อุปกรณ์นี้ไม่รองรับตำแหน่ง', true); return; }
-    byId('geo-hint').textContent = 'กำลังหาตำแหน่ง…';
+    byId('loc-line').innerHTML = '<div class="hint">กำลังหาตำแหน่ง…</div>';
     navigator.geolocation.getCurrentPosition((pos) => {
       F.lat = +pos.coords.latitude.toFixed(6);
       F.lng = +pos.coords.longitude.toFixed(6);
       F.geo = pos.coords.accuracy;
-      drawForm();
+      F.locSrc = 'gps';
+      F.locLabel = 'ตำแหน่งปัจจุบัน';
+      updateLocLine();
     }, (err) => {
-      byId('geo-hint').textContent = '';
+      updateLocLine();
       toast(err.code === 1 ? 'ไม่ได้รับอนุญาตให้ใช้ตำแหน่ง' : 'หาตำแหน่งไม่ได้', true);
     }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 });
   });
@@ -698,6 +711,8 @@ function bindForm(stations, forApp) {
     loadImage(img.dataset.path, 400).then((src) => { img.src = src; }).catch(() => { img.replaceWith(document.createTextNode('โหลดรูปไม่ได้')); });
   });
 
+  $$('[data-cand]').forEach((b) => b.addEventListener('click', () => pickCandidate(Number(b.dataset.cand))));
+  updateLocLine();
   byId('save').addEventListener('click', saveForm);
 }
 
@@ -750,6 +765,36 @@ async function compressImage(file, max, quality) {
   return c.toDataURL('image/jpeg', quality || 0.82);
 }
 
+function isRecorded(c) {
+  return S.items.some((i) => Math.abs((i.cost || 0) - c.cost) < 0.01 && (!c.date || !i.date || Math.abs(parseISO(i.date) - parseISO(c.date)) <= 86400000 * 2));
+}
+
+function pickCandidate(idx) {
+  const c = F.cands[idx];
+  F.candIdx = idx;
+  ['cost', 'kwh', 'date', 'time', 'station'].forEach((k) => {
+    if (c[k] != null && c[k] !== '') { F[k] = c[k]; F.auto[k] = true; }
+  });
+  if (c.app) { F.app = c.app; F.auto.app = true; F.otherOpen = false; }
+  attachKnownLocation(true);
+  drawForm();
+}
+
+function candidatesHtml() {
+  if (!F.cands || F.cands.length < 2) return '';
+  return `<section class="sec">
+    <div class="sec-hd"><span class="label">พบ ${F.cands.length} รายการในรูป · เลือกรายการที่จะบันทึก</span></div>
+    <div class="group cands">${F.cands.map((c, i) => `<button type="button" class="cand ${i === F.candIdx ? 'on' : ''} ${c.recorded ? 'done' : ''}" data-cand="${i}">
+      <span class="radio"></span>
+      <span style="flex-grow:1;display:flex;flex-direction:column;gap:2px;min-width:0;text-align:left">
+        <span style="font-weight:600">${money(c.cost)}${c.kwh != null ? ' · ' + fmt(c.kwh, 2) + ' kWh' : ''}</span>
+        <span class="meta" style="font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${c.date ? thaiShort(c.date) : ''}${c.time ? ' ' + c.time : ''}${c.station ? ' · ' + esc(c.station) : ''}</span>
+      </span>
+      ${c.recorded ? '<span class="badge sample">บันทึกแล้ว</span>' : ''}
+    </button>`).join('')}</div>
+  </section>`;
+}
+
 function applyParsed(kind, p) {
   const setIf = (key, v) => {
     if (v == null || v === '') return;
@@ -761,7 +806,12 @@ function applyParsed(kind, p) {
     setIf('kwh', p.kwh);
     setIf('time', p.time);
     setIf('station', p.station);
-    if (p.date) { F.date = p.date; F.auto.date = true; }
+    if (p.date) {
+      // Only trust an OCR date that is close to today; a misread year would hide the record.
+      const days = Math.abs(parseISO(p.date) - parseISO(todayISO())) / 86400000;
+      if (days <= 45) { F.date = p.date; F.auto.date = true; }
+      else toast('วันที่ในใบเสร็จอ่านได้ ' + p.date + ' ดูไม่น่าถูก ใช้วันนี้แทน ตรวจอีกครั้งนะ', true);
+    }
     if (p.time) { F.time = p.time; F.auto.time = true; }
     if (p.app && (!F.app || F.auto.app)) { F.app = p.app; F.auto.app = true; F.otherOpen = false; }
   } else {
@@ -790,8 +840,19 @@ async function handlePhoto(kind, file) {
   try {
     const r = await api('upload', { kind: kind, dataUrl: form.preview[kind] });
     if (kind === 'car') form.carPic = r.path; else form.receipt = r.path;
-    const p = kind === 'car' ? EVParse.parseCar(r.text) : EVParse.parseReceipt(r.text, APPS);
+    let p = kind === 'car' ? EVParse.parseCar(r.text) : EVParse.parseReceipt(r.text, APPS);
+    if (p.candidates && p.candidates.length > 1) {
+      // History screenshots list several sessions: default to the newest one not yet recorded.
+      const cands = p.candidates.map((c) => Object.assign({}, c, { app: p.app, recorded: isRecorded(c) }));
+      form.cands = cands;
+      const pick = cands.find((c) => !c.recorded) || cands[0];
+      form.candIdx = cands.indexOf(pick);
+      p = Object.assign({}, p, pick);
+    } else {
+      if (kind === 'receipt') form.cands = null;
+    }
     applyParsed(kind, p);
+    if (F === form) attachKnownLocation(false);
     form.ocr[kind] = { status: 'done', summary: summarize(kind, p), text: r.text, err: r.ocrError };
     if (r.ocrError) form.ocr[kind].summary = 'อัปโหลดแล้ว แต่ OCR ใช้ไม่ได้ (' + r.ocrError + ')';
   } catch (err) {
@@ -822,6 +883,24 @@ async function saveForm() {
   if (!F.date) { toast('กรุณาใส่วันที่', true); return; }
   if (!app) { toast('กรุณาเลือกแอปที่ใช้ชาร์จ', true); return; }
   if (!(F.cost >= 0) || F.cost === null) { toast('กรุณาใส่ค่าใช้จ่าย', true); $('#f-cost').focus(); return; }
+  const ageDays = (parseISO(todayISO()) - parseISO(F.date)) / 86400000;
+  if (!F.editing && (ageDays > 60 || ageDays < -1)) {
+    const ok = await confirmBox('วันที่ถูกต้องไหม?', 'รายการนี้ลงวันที่ ' + thaiLong(F.date) + ' ซึ่งห่างจากวันนี้มาก', 'ใช่ บันทึกเลย', false);
+    if (!ok) { $('#f-date').focus(); return; }
+  }
+  if ((F.station || '').trim() && !isNum(F.lat) && !F.locSkipped) {
+    attachKnownLocation(false);
+    if (!isNum(F.lat)) {
+      const choice = await choiceBox('สถานีนี้ยังไม่มีตำแหน่ง', '"' + F.station.trim() + '" จะยังไม่ขึ้นบนแผนที่ ค้นหาตำแหน่งตอนนี้เลยไหม?', [['search', 'ค้นหาตำแหน่ง', 'btn-w'], ['skip', 'ข้ามไปก่อน', 'btn-d']]);
+      if (choice === 'search') {
+        const r = await openLocationPicker({ station: F.station, app: F.app });
+        if (r) { F.lat = r.lat; F.lng = r.lng; F.locLabel = r.label; F.locSrc = 'search'; }
+        else return;
+      } else if (choice === 'skip') {
+        F.locSkipped = true;
+      } else return;
+    }
+  }
   const item = {
     id: F.id, date: F.date, time: F.time || '', app: canonicalApp(app), cost: F.cost, odo: F.odo, kwh: F.kwh, soc: F.soc,
     station: (F.station || '').trim(), lat: F.lat, lng: F.lng, receipt: F.receipt, carPic: F.carPic, note: (F.note || '').trim(),
@@ -834,6 +913,9 @@ async function saveForm() {
     const i = S.items.findIndex((x) => x.id === saved.id);
     if (i >= 0) S.items[i] = saved; else S.items.push(saved);
     persist();
+    if (saved.station && isNum(saved.lat) && F.locSrc && F.locSrc !== 'known') {
+      propagateStationLocation(saved.station, saved.app, saved.lat, saved.lng).catch(() => {});
+    }
     const wasEdit = F.editing;
     F = null;
     toast(wasEdit ? 'แก้ไขแล้ว' : 'บันทึกแล้ว');
@@ -862,7 +944,7 @@ function renderDetail(id) {
   const peak = peakOf(it.date, it.time);
   const mapUrl = isNum(it.lat) ? `https://www.google.com/maps/search/?api=1&query=${it.lat},${it.lng}` : '';
   const kv = [
-    it.station ? ['สถานี', esc(it.station) + (mapUrl ? ` <a class="link" href="${mapUrl}" target="_blank" rel="noopener">แผนที่</a>` : '')] : null,
+    it.station ? ['สถานี', esc(it.station) + (mapUrl ? ` <a class="link" href="${mapUrl}" target="_blank" rel="noopener">แผนที่</a>` : ` <button class="linkbtn warn" id="fix-loc">ยังไม่มีตำแหน่ง · ค้นหา</button>`)] : null,
     isNum(it.odo) ? ['เลขไมล์', fmt(it.odo, 0) + ' กม.'] : null,
     trip != null ? ['วิ่งไปจากครั้งก่อน', fmt(trip, 0) + ' กม.'] : null,
     isNum(it.soc) ? ['แบตก่อนชาร์จ', it.soc + '%'] : null,
@@ -894,6 +976,17 @@ function renderDetail(id) {
   </div>`);
 
   countUp($('#detail-total'), it.cost, 600);
+  const fix = $('#fix-loc');
+  if (fix) fix.addEventListener('click', async () => {
+    const r = await openLocationPicker({ station: it.station, app: it.app });
+    if (!r) return;
+    try {
+      it.lat = r.lat; it.lng = r.lng;
+      const res = await propagateStationLocation(it.station, it.app, r.lat, r.lng);
+      toast('บันทึกตำแหน่งแล้ว · ' + (res.updated || 1) + ' รายการ');
+      renderDetail(it.id);
+    } catch (err) { toast('บันทึกไม่สำเร็จ: ' + err.message, true); }
+  });
   $$('.pic').forEach((b) => {
     const img = $('img', b);
     loadImage(b.dataset.path, 500).then((src) => { img.src = src; img.hidden = false; $('.spinner', b) && $('.spinner', b).remove(); })
@@ -1127,10 +1220,12 @@ function loadLeaflet() {
 function renderMap() {
   setTabs('map');
   const all = stationGroups().filter((s) => isNum(s.lat));
+  const missingN = stationsWithoutLocation().length;
   view(`<div class="mapwrap">
     <div id="map"></div>
     <div class="map-top">
       <div class="search">${icon('search', '#98989F', 18, 2.2)}<label for="mq" class="sr-only">ค้นหาสถานี</label><input id="mq" placeholder="ค้นหาสถานีที่เคยไป" autocomplete="off"></div>
+      ${missingN ? `<button class="missing-banner" id="missing">${icon('pin', 'currentColor', 16, 2.4)}<span>${missingN} สถานียังไม่มีตำแหน่ง · กดเพื่อค้นหา</span>${icon('right', 'currentColor', 14, 2.5)}</button>` : ''}
       <div class="chips">
         <button class="chip ${S.mapFilter === 'all' ? 'on' : ''}" data-f="all">ทั้งหมด</button>
         <button class="chip ${S.mapFilter === 'cheap' ? 'on' : ''}" data-f="cheap">ถูกสุด</button>
@@ -1141,11 +1236,13 @@ function renderMap() {
   </div>`);
 
   const sheet = $('#sheet');
+  const mb = $('#missing');
+  if (mb) mb.addEventListener('click', openMissingStations);
   if (!all.length) {
     sheet.hidden = false;
     sheet.innerHTML = `<div style="display:flex;gap:12px;align-items:flex-start">${icon('pin', '#30D158', 28)}
       <div style="display:flex;flex-direction:column;gap:4px"><b>ยังไม่มีสถานีที่มีพิกัด</b>
-      <span class="meta" style="line-height:1.5">ตอนบันทึกการชาร์จ ใส่ชื่อสถานีแล้วกด "ใช้ตำแหน่งปัจจุบัน" สถานีจะขึ้นบนแผนที่นี้</span></div></div>`;
+      <span class="meta" style="line-height:1.5">ใส่ชื่อสถานีตอนบันทึก แล้วกด "ค้นหาตำแหน่ง" หรือ "ใช้ตำแหน่งปัจจุบัน" สถานีจะขึ้นบนแผนที่นี้</span></div></div>`;
   }
 
   loadLeaflet().then(() => {
@@ -1269,6 +1366,11 @@ function renderCar() {
       </div>
     </section>
     <button class="primary" id="car-save">บันทึกข้อมูลรถ</button>
+    <a class="group" href="#/review" style="flex-direction:row;align-items:center;gap:12px;padding:14px 16px">
+      <span class="rem-ic" style="background:#30D158">${icon('check', '#000', 16, 3)}</span>
+      <span style="flex-grow:1;display:flex;flex-direction:column;gap:2px"><b>ตรวจผลอ่านใบเสร็จ</b><span class="meta" style="font-size:12px">ดูรูปเทียบกับค่าที่อ่านได้และค่าในชีท</span></span>
+      ${icon('right', '#98989F', 18, 2.5)}
+    </a>
   </div>`);
 
   const img = $('.carhero img[data-path]');
@@ -1379,6 +1481,471 @@ function renderSettings() {
 }
 
 /* ------------------------------------------------------------------ */
+/* Station locations: geocoding + picker                               */
+/* ------------------------------------------------------------------ */
+
+/** OCR splits "ำ" into nikhahit + sara aa; fold it back and tidy spaces. */
+function normalizeThai(s) {
+  return String(s || '')
+    .replace(/ํ([่-๋])า/g, '$1ำ')
+    .replace(/ํา/g, 'ำ')
+    .replace(/\s+/g, ' ').trim();
+}
+/** Loose key for matching the same place: ignores spaces, brackets and charger numbers. */
+const stationKey = (s) => normalizeThai(s).toLowerCase().replace(/#\s*\d+/g, '').replace(/[\s()\-_.,@#]/g, '');
+
+/** Builds search queries from a noisy station name, most specific first. */
+function stationQueries(name, app) {
+  const raw = normalizeThai(name);
+  if (!raw) return [];
+  let c = raw
+    .replace(/\(?\s*ร่วมเครือข่าย\s*pea\s*volta\s*\)?/ig, ' ')
+    .replace(/^สถานี\s*/, '')
+    .replace(/pea\s*volta/ig, ' ')
+    .replace(/hoven\s*ev\s*station\s*-?/ig, 'HOVEN ')
+    .replace(/\(TH\d+.*$/i, '')
+    .replace(/#\s*\d+/g, ' ')
+    .replace(/\bกม\.?\s*\d+/g, ' ')
+    .replace(/[@>]/g, ' ')
+    .replace(/^ม\.(?=[ก-๙])/, 'มหาวิทยาลัย')
+    .replace(/\s+/g, ' ').trim();
+  const brand = { 'PEA VOLTA': 'PEA VOLTA', 'Hoven Charge': 'HOVEN', 'EV Station PluZ': 'EV Station PluZ', 'Spark': 'Spark EV', 'iGreen+': 'iGreen+', 'EVolt': 'EVolt', 'Altervim Super Charge': 'Altervim', 'MEA EV': 'MEA EV', 'Gentari Go': 'Gentari', 'OneCharge': 'OneCharge', 'ReverSharger': 'Bangchak' }[app] || '';
+  const isAddress = /(^|\s)[ตอจ]\.|แขวง|เขต|ถนน|ถ\./.test(c);
+  const q = [];
+  if (isAddress) q.push(c);
+  q.push(c + ' สถานีชาร์จ');
+  if (brand && !c.toLowerCase().includes(brand.toLowerCase())) q.push(brand + ' ' + c);
+  q.push(c);
+  if (raw !== c) q.push(raw);
+  return Array.from(new Set(q.filter((x) => x && x.length >= 3))).slice(0, 5);
+}
+
+/** Server (Google geocoder via Apps Script) first, OpenStreetMap Nominatim as fallback. */
+async function geocode(queries) {
+  let results = [];
+  try {
+    const r = await api('geocode', { queries: queries });
+    results = r.results || [];
+  } catch (err) {
+    console.warn('server geocode failed', err);
+  }
+  if (!results.length) {
+    for (const q of queries.slice(0, 3)) {
+      try {
+        const url = 'https://nominatim.openstreetmap.org/search?format=jsonv2&countrycodes=th&accept-language=th&limit=5&q=' + encodeURIComponent(q);
+        const list = await fetch(url).then((x) => x.json());
+        results = list.map((x) => ({ label: x.display_name, name: x.name || q, lat: Number(x.lat), lng: Number(x.lon), query: q }));
+        if (results.length) break;
+      } catch (_) { /* offline */ }
+    }
+  }
+  return results;
+}
+
+function knownLocation(station, app) {
+  const k = stationKey(station);
+  if (!k) return null;
+  const hits = S.items.filter((i) => isNum(i.lat) && stationKey(i.station) === k);
+  if (!hits.length) return null;
+  const same = hits.filter((i) => i.app === app);
+  const use = same.length ? same : hits;
+  return { lat: use[0].lat, lng: use[0].lng };
+}
+
+/** Reuses coordinates already stored for the same station name. */
+function attachKnownLocation(replaceAuto) {
+  if (!F) return;
+  if (isNum(F.lat) && !(replaceAuto && F.locSrc === 'known')) return;
+  const k = knownLocation(F.station, F.app);
+  if (k) { F.lat = k.lat; F.lng = k.lng; F.locSrc = 'known'; F.locLabel = 'ตำแหน่งเดิมของสถานีนี้'; F.geo = null; }
+  else if (replaceAuto && F.locSrc === 'known') { F.lat = null; F.lng = null; F.locSrc = null; F.locLabel = ''; }
+}
+
+function locLineHtml() {
+  if (isNum(F.lat)) {
+    const lbl = F.locLabel || (F.lat.toFixed(5) + ', ' + F.lng.toFixed(5));
+    return `<div class="locline ok">${icon('check', 'currentColor', 14, 3)}<span>มีตำแหน่งแล้ว · ${esc(lbl)}${F.geo ? ' (±' + Math.round(F.geo) + ' ม.)' : ''}</span>
+      <button type="button" class="linkbtn" id="loc-clear">ล้าง</button></div>`;
+  }
+  if ((F.station || '').trim()) return `<div class="locline warn">${icon('pin', 'currentColor', 14, 2.4)}<span>ยังไม่มีตำแหน่งบนแผนที่ · กดค้นหาหรือใช้ตำแหน่งปัจจุบัน</span></div>`;
+  return '<div class="locline">ใส่ชื่อสถานี แล้วค้นหาตำแหน่งบนแผนที่ได้</div>';
+}
+function updateLocLine() {
+  const el = document.getElementById('loc-line');
+  if (!el) return;
+  el.innerHTML = locLineHtml();
+  const c = document.getElementById('loc-clear');
+  if (c) c.addEventListener('click', () => { F.lat = null; F.lng = null; F.locSrc = null; F.locLabel = ''; F.geo = null; updateLocLine(); });
+}
+
+/** Modal with custom buttons; resolves to the chosen key or null. */
+function choiceBox(title, text, buttons) {
+  return new Promise((resolve) => {
+    const root = $('#modal-root');
+    root.innerHTML = `<div class="modal-bg"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="mdl-t">
+      <h3 id="mdl-t">${esc(title)}</h3><p>${esc(text)}</p>
+      <div class="btnrow">${buttons.map((b) => `<button class="${b[2]}" data-v="${b[0]}">${esc(b[1])}</button>`).join('')}</div>
+    </div></div>`;
+    const bg = $('.modal-bg', root);
+    bg.addEventListener('click', (e) => { if (e.target === bg) { root.innerHTML = ''; resolve(null); } });
+    root.querySelectorAll('[data-v]').forEach((b) => b.addEventListener('click', () => { root.innerHTML = ''; resolve(b.dataset.v); }));
+  });
+}
+
+/**
+ * Full-screen picker: search results + map with a draggable pin.
+ * Resolves {lat, lng, label} or null when skipped.
+ */
+function openLocationPicker(opts) {
+  return new Promise((resolve) => {
+    const root = $('#modal-root');
+    const queries = stationQueries(opts.station, opts.app);
+    root.innerHTML = `<div class="picker" role="dialog" aria-modal="true" aria-labelledby="pk-t">
+      <div class="picker-hd">
+        <button class="navbtn" id="pk-skip">ข้าม</button>
+        <div class="title" id="pk-t">ตำแหน่งสถานี</div>
+        <button class="navbtn strong" id="pk-use" disabled>ใช้ตำแหน่งนี้</button>
+      </div>
+      <div class="picker-search">
+        <div class="search">${icon('search', '#98989F', 18, 2.2)}<label for="pk-q" class="sr-only">ค้นหาสถานี</label>
+          <input id="pk-q" value="${esc(queries[0] || opts.station || '')}" placeholder="ชื่อสถานี ปั๊ม หรือย่าน" autocomplete="off" enterkeyhint="search"></div>
+        <button class="chip" id="pk-go">ค้นหา</button>
+      </div>
+      <div id="pk-map"></div>
+      <div class="picker-list" id="pk-list"><div class="loading"><div class="spinner"></div>กำลังค้นหา…</div></div>
+      <div class="picker-foot">
+        <button class="chip" id="pk-gps">${icon('nav', '#fff', 14, 2.2)}ใช้ตำแหน่งปัจจุบัน</button>
+        <span class="meta" style="font-size:12px">ลากหมุดเพื่อขยับให้ตรงได้</span>
+      </div>
+    </div>`;
+    let map = null, marker = null, results = [], chosen = null;
+    const done = (v) => { if (map) map.remove(); root.innerHTML = ''; resolve(v); };
+    const useBtn = $('#pk-use');
+
+    const setChosen = (lat, lng, label, fly) => {
+      chosen = { lat: +lat.toFixed(6), lng: +lng.toFixed(6), label: label };
+      useBtn.disabled = false;
+      if (!map) return;
+      if (!marker) {
+        marker = L.marker([lat, lng], { draggable: true, icon: L.divIcon({ className: '', html: '<div class="pk-pin"></div>', iconSize: [30, 30], iconAnchor: [15, 30] }) }).addTo(map);
+        marker.on('dragend', () => { const p = marker.getLatLng(); chosen = { lat: +p.lat.toFixed(6), lng: +p.lng.toFixed(6), label: (chosen && chosen.label ? chosen.label + ' (ปรับตำแหน่ง)' : 'ปักหมุดเอง') }; });
+      } else marker.setLatLng([lat, lng]);
+      if (fly) map.setView([lat, lng], 16);
+    };
+    const renderList = () => {
+      const list = $('#pk-list');
+      if (!results.length) {
+        list.innerHTML = `<div class="empty">ไม่พบตำแหน่ง ลองพิมพ์ชื่อสั้นลง เช่น "บางจาก ทุ่งใหญ่"<br>หรือแตะบนแผนที่เพื่อปักหมุดเอง</div>`;
+        return;
+      }
+      list.innerHTML = results.map((r, i) => `<button class="pk-item ${chosen && chosen.i === i ? 'on' : ''}" data-i="${i}">
+        ${icon('pin', '#30D158', 18)}<span><b>${esc(r.name || r.label.split(',')[0])}</b><small>${esc(r.label)}</small></span></button>`).join('');
+      list.querySelectorAll('.pk-item').forEach((b) => b.addEventListener('click', () => {
+        const r = results[Number(b.dataset.i)];
+        setChosen(r.lat, r.lng, r.name || r.label, true);
+        chosen.i = Number(b.dataset.i);
+        list.querySelectorAll('.pk-item').forEach((x) => x.classList.toggle('on', x === b));
+      }));
+    };
+    const search = async (qs) => {
+      $('#pk-list').innerHTML = '<div class="loading"><div class="spinner"></div>กำลังค้นหา…</div>';
+      results = await geocode(qs);
+      renderList();
+      if (results.length) {
+        const r = results[0];
+        setChosen(r.lat, r.lng, r.name || r.label, true);
+        chosen.i = 0;
+        const first = $('#pk-list .pk-item');
+        if (first) first.classList.add('on');
+        if (map && results.length > 1) {
+          results.slice(1).forEach((x) => L.circleMarker([x.lat, x.lng], { radius: 6, color: '#30D158', weight: 2, fillOpacity: 0.3 }).addTo(map));
+        }
+      }
+    };
+
+    $('#pk-skip').addEventListener('click', () => done(null));
+    useBtn.addEventListener('click', () => { if (chosen) done({ lat: chosen.lat, lng: chosen.lng, label: chosen.label }); });
+    const go = () => { const v = $('#pk-q').value.trim(); if (v) search(stationQueries(v, opts.app).concat([v])); };
+    $('#pk-go').addEventListener('click', go);
+    $('#pk-q').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); go(); } });
+    $('#pk-gps').addEventListener('click', () => {
+      if (!navigator.geolocation) { toast('อุปกรณ์นี้ไม่รองรับตำแหน่ง', true); return; }
+      navigator.geolocation.getCurrentPosition((p) => setChosen(p.coords.latitude, p.coords.longitude, 'ตำแหน่งปัจจุบัน', true),
+        () => toast('หาตำแหน่งไม่ได้', true), { enableHighAccuracy: true, timeout: 15000 });
+    });
+
+    loadLeaflet().then(() => {
+      if (!document.getElementById('pk-map')) return;
+      map = L.map('pk-map', { zoomControl: false, attributionControl: false }).setView([13.7563, 100.5018], 6);
+      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, className: 'dark-tiles' }).addTo(map);
+      L.control.attribution({ position: 'bottomright', prefix: false }).addAttribution('&copy; OpenStreetMap').addTo(map);
+      map.on('click', (e) => { setChosen(e.latlng.lat, e.latlng.lng, 'ปักหมุดเอง', false); });
+      if (isNum(opts.lat)) setChosen(opts.lat, opts.lng, 'ตำแหน่งเดิม', true);
+      if (queries.length) search(queries); else renderList();
+    }).catch((err) => { toast(err.message, true); if (queries.length) search(queries); });
+  });
+}
+
+/** Saves the location to every record of this station that has none yet. */
+async function propagateStationLocation(station, app, lat, lng) {
+  const r = await api('setStationLocation', { station: station, app: app, lat: lat, lng: lng });
+  const k = stationKey(station);
+  S.items.forEach((i) => { if (stationKey(i.station) === k && (!app || i.app === app) && !isNum(i.lat)) { i.lat = lat; i.lng = lng; } });
+  persist();
+  return r;
+}
+
+/** Stations that still have no coordinates (for the map page). */
+function stationsWithoutLocation() {
+  const skipped = loadLS('locSkip', []);
+  return stationGroups().filter((s) => !isNum(s.lat) && !skipped.includes(stationKey(s.name) + '|' + s.app));
+}
+
+async function openMissingStations() {
+  const root = $('#modal-root');
+  const draw = () => {
+    const list = stationsWithoutLocation();
+    root.innerHTML = `<div class="picker" role="dialog" aria-modal="true" aria-labelledby="ms-t">
+      <div class="picker-hd"><div style="width:60px"></div><div class="title" id="ms-t">สถานีที่ยังไม่มีตำแหน่ง</div><button class="navbtn strong" id="ms-close">เสร็จ</button></div>
+      <div class="picker-list" style="flex-grow:1">${list.length ? list.map((s, i) => `<div class="ms-row">
+        ${logoHtml(s.app, 'logo', 36)}
+        <span style="flex-grow:1;min-width:0;display:flex;flex-direction:column"><b style="overflow-wrap:anywhere">${esc(s.name)}</b><small class="meta">${esc(s.app)} · ${s.visits} ครั้ง · ล่าสุด ${thaiShort(s.last)}</small></span>
+        <button class="chip" data-find="${i}">ค้นหา</button><button class="chip" data-skip="${i}" style="background:transparent">ข้าม</button>
+      </div>`).join('') : '<div class="empty">ทุกสถานีมีตำแหน่งแล้ว</div>'}</div>
+    </div>`;
+    $('#ms-close').addEventListener('click', () => { root.innerHTML = ''; renderMap(); });
+    root.querySelectorAll('[data-skip]').forEach((b) => b.addEventListener('click', () => {
+      const s = list[Number(b.dataset.skip)];
+      const sk = loadLS('locSkip', []);
+      sk.push(stationKey(s.name) + '|' + s.app);
+      saveLS('locSkip', sk);
+      draw();
+    }));
+    root.querySelectorAll('[data-find]').forEach((b) => b.addEventListener('click', async () => {
+      const s = list[Number(b.dataset.find)];
+      const r = await openLocationPicker({ station: s.name, app: s.app });
+      if (r) {
+        try {
+          const res = await propagateStationLocation(s.name, s.app, r.lat, r.lng);
+          toast('บันทึกตำแหน่งแล้ว · ' + (res.updated || 0) + ' รายการ');
+        } catch (err) { toast('บันทึกไม่สำเร็จ: ' + err.message, true); }
+      }
+      draw();
+    }));
+  };
+  draw();
+}
+
+/* ------------------------------------------------------------------ */
+/* Review portal: check OCR results against the sheet, with the image  */
+/* ------------------------------------------------------------------ */
+
+const R = { samples: null, loading: false, filter: 'todo', idx: 0, entries: [] };
+
+function buildReviewEntries() {
+  const fileOf = (p) => String(p || '').split('/').pop();
+  const near = (a, b) => a != null && b != null && Math.abs(a - b) < 0.011;
+  R.entries = (R.samples || []).map((s) => {
+    const e = { s: s, kind: s.kind };
+    if (s.kind === 'car') {
+      e.p = EVParse.parseCar(s.text);
+      e.item = S.items.find((i) => fileOf(i.carPic) === s.file) || null;
+      e.checks = e.item && isNum(e.item.odo) ? { odo: near(e.p.odo, e.item.odo) } : {};
+    } else {
+      const p = EVParse.parseReceipt(s.text, APPS);
+      e.item = S.items.find((i) => fileOf(i.receipt) === s.file) || null;
+      let q = p;
+      if (p.candidates && p.candidates.length) {
+        q = (e.item && p.candidates.find((c) => near(c.cost, e.item.cost))) || p.candidates[0];
+        e.nCands = p.candidates.length;
+      }
+      e.p = Object.assign({ app: p.app }, q);
+      if (e.item) {
+        const t = e.item;
+        e.checks = {
+          app: e.p.app === t.app,
+          cost: near(e.p.cost, t.cost),
+          kwh: t.kwh == null || near(e.p.kwh, t.kwh),
+          date: !!(e.p.date && t.date && Math.abs(parseISO(e.p.date) - parseISO(t.date)) <= 86400000),
+        };
+      } else e.checks = {};
+    }
+    const vals = Object.values(e.checks);
+    e.auto = !e.item ? 'noitem' : vals.every(Boolean) ? 'match' : 'diff';
+    e.status = s.review || e.auto;
+    return e;
+  }).sort((a, b) => String(b.s.file).localeCompare(String(a.s.file), 'en', { numeric: true }));
+}
+
+function reviewList() {
+  const f = R.filter;
+  return R.entries.filter((e) =>
+    f === 'all' ? true :
+    f === 'done' ? !!e.s.review :
+    f === 'wrong' ? e.s.review === 'wrong' :
+    !e.s.review && (e.auto === 'diff' || e.auto === 'noitem'));
+}
+
+async function renderReview() {
+  setTabs(null);
+  if (!R.samples && !R.loading) {
+    R.loading = true;
+    view(`<div class="page"><div class="navbar"><a class="circle" href="#/car" aria-label="กลับ">${icon('left', '#fff', 20, 2.5)}</a><div class="title">ตรวจใบเสร็จ</div><div style="width:44px"></div></div>
+      <div class="loading"><div class="spinner"></div>กำลังโหลดผล OCR…</div></div>`);
+    try {
+      R.samples = (await api('ocrSamples')).samples || [];
+    } catch (err) {
+      R.loading = false;
+      toast(err.message, true);
+      return;
+    }
+    R.loading = false;
+    buildReviewEntries();
+    if (!reviewList().length) R.filter = 'all';
+  }
+  if (!R.samples) return;
+  drawReview();
+}
+
+function drawReview() {
+  const list = reviewList();
+  if (R.idx >= list.length) R.idx = Math.max(0, list.length - 1);
+  const e = list[R.idx];
+  const count = (f) => { const keep = R.filter; R.filter = f; const n = reviewList().length; R.filter = keep; return n; };
+  const reviewed = R.entries.filter((x) => x.s.review).length;
+
+  const pill = (st) => ({
+    match: '<span class="rv-pill ok">ตรงกับชีท</span>', diff: '<span class="rv-pill bad">ต่างจากชีท</span>',
+    noitem: '<span class="rv-pill new">ไม่มีในชีท</span>', ok: '<span class="rv-pill ok">ยืนยันถูกแล้ว</span>', wrong: '<span class="rv-pill bad">แจ้งว่าผิด</span>',
+  }[st] || '');
+  const row = (label, got, sheet, ok, fmtFn) => {
+    const g = got == null || got === '' ? '–' : fmtFn ? fmtFn(got) : got;
+    const t = sheet === undefined ? '' : sheet == null || sheet === '' ? '–' : fmtFn ? fmtFn(sheet) : sheet;
+    const mark = ok === true ? icon('check', '#30D158', 16, 3) : ok === false ? icon('x', '#FF6961', 16, 3) : '';
+    return `<div class="rv-row ${ok === false ? 'bad' : ''}"><span class="k">${label}</span><span class="g">${esc(g)}</span>${sheet === undefined ? '' : `<span class="t">${esc(t)}</span>`}<span class="m">${mark}</span></div>`;
+  };
+
+  let body = '';
+  if (e) {
+    const t = e.item;
+    const has = !!t;
+    const fields = e.kind === 'car'
+      ? row('เลขไมล์', e.p.odo, has ? t.odo : undefined, e.checks.odo, (v) => fmt(v, 0))
+        + row('แบต %', e.p.soc, has ? t.soc : undefined, undefined)
+        + row('วิ่งได้อีก', e.p.range != null ? e.p.range + ' กม.' : null, undefined, undefined)
+      : row('แอป', e.p.app, has ? t.app : undefined, e.checks.app)
+        + row('ยอดเงิน', e.p.cost, has ? t.cost : undefined, e.checks.cost, (v) => money(v))
+        + row('kWh', e.p.kwh, has ? t.kwh : undefined, e.checks.kwh, (v) => fmt(v, 2))
+        + row('วันที่', e.p.date, has ? t.date : undefined, e.checks.date, (v) => thaiShort(v) + ' ' + String(v).slice(0, 4))
+        + row('เวลาเริ่ม', e.p.time, has ? t.time : undefined, undefined)
+        + row('สถานี', e.p.station, has ? t.station : undefined, undefined);
+    body = `
+      <button class="rv-img" id="rv-img" aria-label="ดูรูปเต็มจอ"><div class="spinner"></div><img alt="" hidden></button>
+      <div class="card" style="gap:12px">
+        <div class="row-between" style="flex-wrap:wrap;gap:8px">
+          <div style="display:flex;gap:10px;align-items:center;min-width:0">${e.kind === 'car' ? `<div class="logo mono" style="width:32px;height:32px">${icon('car', '#fff', 18)}</div>` : logoHtml(e.p.app, 'logo', 32)}
+            <b style="overflow-wrap:anywhere">${esc(e.kind === 'car' ? 'หน้าจอรถ' : (e.p.app || 'ไม่รู้แอป'))}</b></div>
+          ${pill(e.status)}
+        </div>
+        ${e.nCands > 1 ? `<div class="meta" style="font-size:12px">รูปนี้มี ${e.nCands} รายการ · แสดงรายการที่ตรงกับชีท</div>` : ''}
+        <div class="rv-table">
+          <div class="rv-row head"><span class="k"></span><span class="g">อ่านได้</span>${e.item ? '<span class="t">ในชีท</span>' : ''}<span class="m"></span></div>
+          ${fields}
+        </div>
+        <div class="meta" style="font-size:11px;word-break:break-all">${esc(e.s.file)}</div>
+        ${e.item ? `<a class="link" href="#/edit/${encodeURIComponent(e.item.id)}">แก้ค่าในชีทสำหรับรายการนี้ ${icon('right', '#30D158', 14, 2.5)}</a>` : ''}
+        <div id="rv-note-wrap" ${e.s.review === 'wrong' ? '' : 'hidden'}>
+          <label for="rv-note" class="label">บอกว่าผิดตรงไหน (ไม่บังคับ)</label>
+          <input id="rv-note" class="field-input" value="${esc(e.s.note)}" placeholder="เช่น kWh ที่ถูกคือ 22.63" autocomplete="off">
+        </div>
+      </div>`;
+  } else {
+    body = '<div class="empty">ไม่มีรายการในกลุ่มนี้</div>';
+  }
+
+  view(`<div class="page rv">
+    <div class="navbar"><a class="circle" href="#/car" aria-label="กลับ">${icon('left', '#fff', 20, 2.5)}</a>
+      <div class="title">ตรวจใบเสร็จ</div>
+      <div class="meta" style="min-width:44px;text-align:right">${list.length ? (R.idx + 1) + '/' + list.length : ''}</div></div>
+    <div class="rv-progress"><i style="width:${R.entries.length ? (reviewed / R.entries.length) * 100 : 0}%"></i></div>
+    <div class="meta" style="font-size:12px;margin-top:-12px">ตรวจแล้ว ${reviewed} จาก ${R.entries.length} รูป</div>
+    <div class="chips">
+      ${[['todo', 'ต้องตรวจ'], ['all', 'ทั้งหมด'], ['wrong', 'แจ้งว่าผิด'], ['done', 'ตรวจแล้ว']].map((c) => `<button class="chip ${R.filter === c[0] ? 'on' : ''}" data-rf="${c[0]}">${c[1]} ${count(c[0])}</button>`).join('')}
+    </div>
+    ${body}
+  </div>
+  ${e ? `<div class="savebar rv-bar">
+    <button class="circle" id="rv-prev" aria-label="ก่อนหน้า" ${R.idx === 0 ? 'disabled' : ''}>${icon('left', '#fff', 20, 2.5)}</button>
+    <button class="btn-d rv-btn" id="rv-wrong">${icon('x', '#FF6961', 18, 3)}ผิด</button>
+    <button class="btn-w rv-btn" id="rv-ok">${icon('check', '#000', 18, 3)}ถูกต้อง</button>
+    <button class="circle" id="rv-next" aria-label="ถัดไป" ${R.idx >= list.length - 1 ? 'disabled' : ''}>${icon('right', '#fff', 20, 2.5)}</button>
+  </div>` : ''}`);
+
+  $$('[data-rf]').forEach((b) => b.addEventListener('click', () => { R.filter = b.dataset.rf; R.idx = 0; drawReview(); }));
+  if (!e) return;
+
+  const imgBtn = $('#rv-img');
+  const img = $('img', imgBtn);
+  const src = e.s.fileId;
+  loadImageById(src, 1200).then((d) => { if (!img.isConnected) return; img.src = d; img.hidden = false; const sp = $('.spinner', imgBtn); if (sp) sp.remove(); })
+    .catch(() => { const sp = $('.spinner', imgBtn); if (sp) sp.outerHTML = '<span class="meta">โหลดรูปไม่ได้</span>'; });
+  imgBtn.addEventListener('click', () => { if (img.src) openViewerSrc(img.src); });
+  const next = list[R.idx + 1];
+  if (next) loadImageById(next.s.fileId, 1200).catch(() => {});
+
+  const go = (d) => { const n = R.idx + d; if (n >= 0 && n < list.length) { R.idx = n; drawReview(); window.scrollTo(0, 0); } };
+  $('#rv-prev').addEventListener('click', () => go(-1));
+  $('#rv-next').addEventListener('click', () => go(1));
+  const mark = async (review) => {
+    const note = review === 'wrong' ? (($('#rv-note') || {}).value || '').trim() : '';
+    const prevReview = e.s.review, prevNote = e.s.note;
+    e.s.review = review; e.s.note = note; e.status = review;
+    const stillListed = reviewList().includes(e);
+    if (stillListed) R.idx += 1;
+    drawReview();
+    window.scrollTo(0, 0);
+    try {
+      await api('markReviewed', { file: e.s.file, review: review, note: note });
+    } catch (err) {
+      e.s.review = prevReview; e.s.note = prevNote; e.status = prevReview || e.auto;
+      toast('บันทึกผลตรวจไม่สำเร็จ: ' + err.message, true);
+      drawReview();
+    }
+  };
+  $('#rv-ok').addEventListener('click', () => mark('ok'));
+  $('#rv-wrong').addEventListener('click', () => {
+    const wrap = $('#rv-note-wrap');
+    if (wrap.hidden) { wrap.hidden = false; $('#rv-note').focus(); $('#rv-wrong').innerHTML = icon('x', '#FF6961', 18, 3) + 'ยืนยันว่าผิด'; return; }
+    mark('wrong');
+  });
+
+  // Swipe left/right on the image to move between receipts.
+  let x0 = null;
+  imgBtn.addEventListener('touchstart', (ev) => { x0 = ev.touches[0].clientX; }, { passive: true });
+  imgBtn.addEventListener('touchend', (ev) => {
+    if (x0 == null) return;
+    const dx = ev.changedTouches[0].clientX - x0;
+    x0 = null;
+    if (Math.abs(dx) > 60) go(dx < 0 ? 1 : -1);
+  });
+}
+
+function loadImageById(fileId, size) {
+  const key = 'id:' + fileId + '@' + size;
+  if (S.imgs.has(key)) return S.imgs.get(key);
+  const p = api('image', { fileId: fileId, size: size }).then((r) => r.dataUrl);
+  S.imgs.set(key, p);
+  p.catch(() => S.imgs.delete(key));
+  return p;
+}
+
+function openViewerSrc(src) {
+  const root = $('#modal-root');
+  root.innerHTML = `<div class="viewer"><img src="${src}" alt="รูปเต็ม"><button class="circle" aria-label="ปิด">${icon('x', '#fff')}</button></div>`;
+  $('.viewer button', root).addEventListener('click', () => { root.innerHTML = ''; });
+}
+
+/* ------------------------------------------------------------------ */
 /* Router                                                              */
 /* ------------------------------------------------------------------ */
 
@@ -1412,6 +1979,7 @@ function routeNow() {
   else if (path === '/map') renderMap();
   else if (path === '/car') renderCar();
   else if (path === '/settings') renderSettings();
+  else if (path === '/review') renderReview();
   else renderHome();
   if (!/^\/map/.test(path)) window.scrollTo(0, 0);
 }
