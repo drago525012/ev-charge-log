@@ -1,7 +1,7 @@
 /* EV Charge Log - PWA frontend (vanilla JS, no build step). */
 'use strict';
 
-const VERSION = '1.5.1';
+const VERSION = '1.5.2';
 
 /* ------------------------------------------------------------------ */
 /* Constants                                                           */
@@ -207,7 +207,51 @@ function normalizeItem(it) {
   // Sheets in Thai locale can return Buddhist-era years (e.g. 2569-09-12).
   const y = Number(date.slice(0, 4));
   if (y > 2400) date = (y - 543) + date.slice(4);
-  return Object.assign({}, it, { date: date, app: canonicalApp(it.app) });
+  const out = Object.assign({}, it, { date: date, app: canonicalApp(it.app) });
+  // Station cell holding a Google Maps link or an OCR label: never show it as a name.
+  const st = String(out.station || '').trim();
+  if (st && isMapsLink(st)) { out.stationLink = st; out.station = ''; out._fix = true; }
+  else if (st && !isUsableStationName(st)) { out.station = ''; out._fix = true; }
+  return out;
+}
+
+/**
+ * Rewrites bad station cells in the sheet once: a Google Maps link becomes the place name
+ * (plus coordinates), an OCR label like "ที่อยู่" is cleared.
+ */
+let repairing = false;
+async function repairStations() {
+  if (repairing) return;
+  const bad = S.items.filter((i) => i._fix);
+  if (!bad.length) return;
+  repairing = true;
+  const cache = new Map();
+  let fixed = 0;
+  try {
+    for (const it of bad) {
+      if (it.stationLink) {
+        if (!cache.has(it.stationLink)) cache.set(it.stationLink, await resolveMapsLink(it.stationLink).catch(() => null));
+        const loc = cache.get(it.stationLink);
+        if (!loc) continue; // keep the link for a later retry
+        it.station = loc.name && loc.name !== 'Google Maps' ? loc.name : '';
+        if (!isNum(it.lat)) { it.lat = loc.lat; it.lng = loc.lng; }
+      }
+      const item = { id: it.id, date: it.date, time: it.time || '', app: it.app, cost: it.cost, odo: it.odo, kwh: it.kwh, soc: it.soc,
+        station: it.station || '', lat: it.lat, lng: it.lng, receipt: it.receipt, carPic: it.carPic, note: it.note || '' };
+      try {
+        await api('save', { item: item });
+        delete it._fix; delete it.stationLink;
+        fixed++;
+      } catch (err) { console.warn('station repair failed', it.id, err); }
+    }
+  } finally {
+    repairing = false;
+  }
+  if (fixed) {
+    persist();
+    if (!F) routeNow();
+    toast('แก้ชื่อสถานีในชีทแล้ว ' + fixed + ' รายการ');
+  }
 }
 
 function persist() {
@@ -226,6 +270,7 @@ async function sync(silent) {
     persist();
     if (!silent) toast('อัปเดตข้อมูลแล้ว');
     if (!F) routeNow(); // don't wipe a form that is being filled in
+    setTimeout(() => repairStations().catch(() => {}), 500);
   } catch (err) {
     toast(err.message, true);
   } finally {
@@ -683,7 +728,11 @@ function bindForm(stations, forApp) {
   });
   byId('loc-search').addEventListener('click', async () => {
     const r = await openLocationPicker({ station: F.station, app: F.app, lat: F.lat, lng: F.lng });
-    if (r) { F.lat = r.lat; F.lng = r.lng; F.locLabel = r.label; F.locSrc = 'search'; F.geo = null; updateLocLine(); }
+    if (r) {
+      F.lat = r.lat; F.lng = r.lng; F.locLabel = r.label; F.locSrc = 'search'; F.geo = null;
+      if (r.name && (!String(F.station || '').trim() || isMapsLink(F.station))) { F.station = r.name; byId('f-station').value = r.name; }
+      updateLocLine();
+    }
   });
   byId('f-note').addEventListener('input', (e) => { F.note = e.target.value; });
 
@@ -927,6 +976,14 @@ async function saveForm() {
     const ok = await confirmBox('วันที่ถูกต้องไหม?', 'รายการนี้ลงวันที่ ' + thaiLong(F.date) + ' ซึ่งห่างจากวันนี้มาก', 'ใช่ บันทึกเลย', false);
     if (!ok) { $('#f-date').focus(); return; }
   }
+  if (isMapsLink(F.station)) {
+    try {
+      const loc = await resolveMapsLink(F.station);
+      F.station = loc.name && loc.name !== 'Google Maps' ? loc.name : '';
+      if (!isNum(F.lat)) Object.assign(F, { lat: loc.lat, lng: loc.lng, locSrc: 'gmaps', locLabel: loc.name });
+    } catch (err) { toast('อ่านลิงก์ไม่ได้ กรุณาพิมพ์ชื่อสถานี', true); return; }
+  }
+  if (!isUsableStationName(F.station)) F.station = '';
   if ((F.station || '').trim() && !isNum(F.lat) && !F.locSkipped) {
     attachKnownLocation(false);
     if (!isNum(F.lat)) {
@@ -1788,6 +1845,7 @@ async function consumeSharedLink() {
   if (p && Date.now() - p.ts < 3 * 3600000) {
     if (p.draft) {
       F = Object.assign(p.draft, { lat: loc.lat, lng: loc.lng, locSrc: 'gmaps', locLabel: loc.name, geo: null, locSkipped: false });
+      if ((!String(F.station || '').trim() || isMapsLink(F.station)) && loc.name !== 'Google Maps') F.station = loc.name;
       if (location.hash === p.route) route(); else location.hash = p.route;
       toast('ใส่ตำแหน่งจาก Google Maps แล้ว · กดบันทึกได้เลย');
       return;
@@ -2050,7 +2108,7 @@ function openLocationPicker(opts) {
     }
 
     $('#pk-skip').addEventListener('click', () => done(null));
-    useBtn.addEventListener('click', () => { if (chosen) done({ lat: chosen.lat, lng: chosen.lng, label: chosen.label }); });
+    useBtn.addEventListener('click', () => { if (chosen) done({ lat: chosen.lat, lng: chosen.lng, label: chosen.label, name: chosen.i != null && results[chosen.i] && /^(ocm|gmaps)$/.test(results[chosen.i].src) ? results[chosen.i].name : '' }); });
     $('#pk-go').addEventListener('click', go);
     qInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); go(); } });
     qInput.addEventListener('input', () => { syncGmLink(); if (isMapsLink(qInput.value)) go(); });
@@ -2383,6 +2441,7 @@ document.addEventListener('visibilitychange', () => {
 
 // Boot
 if (new URLSearchParams(location.search).get('shared') === '1' && !/#\/add/.test(location.hash)) location.hash = '#/add';
+S.items = S.items.map(normalizeItem); // clean cached rows (links / OCR labels as station names)
 const sharedLink = new URLSearchParams(location.search).get('sharedlink') === '1';
 if (sharedLink) history.replaceState(null, '', location.pathname + (location.hash || '#/'));
 route();
