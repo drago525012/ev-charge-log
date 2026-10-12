@@ -1,7 +1,7 @@
 /* EV Charge Log - PWA frontend (vanilla JS, no build step). */
 'use strict';
 
-const VERSION = '1.4.1';
+const VERSION = '1.5.0';
 
 /* ------------------------------------------------------------------ */
 /* Constants                                                           */
@@ -153,6 +153,7 @@ const ICONS = {
   camera: '<path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/>',
   pin: '<path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/>',
   nav: '<path d="M3 11l18-8-8 18-2-8z"/>',
+  link: '<path d="M10 14a4.5 4.5 0 0 0 6.4 0l3-3a4.5 4.5 0 0 0-6.4-6.4l-1 1"/><path d="M14 10a4.5 4.5 0 0 0-6.4 0l-3 3a4.5 4.5 0 0 0 6.4 6.4l1-1"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   x: '<path d="M6 6l12 12M18 6L6 18"/>',
   gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
@@ -1269,7 +1270,7 @@ function renderMap() {
 
   loadLeaflet().then(() => {
     if (!$('#map')) return;
-    if (mapObj) { mapObj.remove(); mapObj = null; }
+    if (mapObj) { killMap(mapObj); mapObj = null; }
     mapObj = L.map('map', { zoomControl: false, attributionControl: false }).setView([13.7563, 100.5018], 11);
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19, attribution: '&copy; OpenStreetMap contributors', className: 'dark-tiles',
@@ -1458,6 +1459,15 @@ function renderSettings() {
     </section>
     <button class="primary" id="s-save">บันทึกและทดสอบ</button>
     <section class="sec">
+      <div class="sec-hd"><span class="label">ฐานข้อมูลสถานีชาร์จ (Open Charge Map)</span></div>
+      <div class="group">
+        <div class="f"><label for="s-ocm" class="label">API key (ฟรี)</label><input id="s-ocm" class="field-input" placeholder="วาง key ที่นี่" value="${esc(loadLS('ocmKey', ''))}" autocomplete="off"></div>
+        <div class="kv"><span>สถานีในเครื่อง</span><b id="s-ocm-n">${OCM && OCM.list ? OCM.list.length.toLocaleString('th-TH') + ' แห่ง · ' + new Date(OCM.at).toLocaleDateString('th-TH', { day: 'numeric', month: 'short' }) : '–'}</b></div>
+      </div>
+      <p class="meta" style="margin:0;padding:0 4px;line-height:1.6">ใช้ค้นตำแหน่งสถานีให้แม่นขึ้น · สมัครฟรีที่ <a class="link" href="https://openchargemap.org/site/profile/applications" target="_blank" rel="noopener">openchargemap.org</a> แล้วกด "Register an application" เพื่อรับ key</p>
+      <button class="secondary" id="s-ocm-save">บันทึก key และโหลดสถานี</button>
+    </section>
+    <section class="sec">
       <div class="group">
         <div class="kv"><span>รายการในเครื่อง</span><b>${S.items.length}</b></div>
         <div class="kv"><span>ซิงก์ล่าสุด</span><b>${S.lastSync ? new Date(S.lastSync).toLocaleString('th-TH') : '–'}</b></div>
@@ -1490,6 +1500,23 @@ function renderSettings() {
       btn.textContent = 'บันทึกและทดสอบ';
       toast(err.message, true);
     }
+  });
+  $('#s-ocm-save').addEventListener('click', async () => {
+    const key = $('#s-ocm').value.trim();
+    const btn = $('#s-ocm-save');
+    saveLS('ocmKey', key);
+    if (!key) { OCM = null; localStorage.removeItem('evlog.ocm'); $('#s-ocm-n').textContent = '–'; toast('ลบ key แล้ว'); return; }
+    btn.disabled = true;
+    btn.innerHTML = '<div class="spinner"></div>กำลังโหลดสถานีทั่วไทย…';
+    try {
+      const d = await ensureOcm(true);
+      $('#s-ocm-n').textContent = d.list.length.toLocaleString('th-TH') + ' แห่ง · วันนี้';
+      toast('โหลดแล้ว ' + d.list.length.toLocaleString('th-TH') + ' สถานี');
+    } catch (err) {
+      toast('โหลดไม่สำเร็จ: ' + err.message, true);
+    }
+    btn.disabled = false;
+    btn.textContent = 'บันทึก key และโหลดสถานี';
   });
   $('#s-clear').addEventListener('click', async () => {
     if (!(await confirmBox('ล้างข้อมูลในเครื่อง?', 'ข้อมูลในชีทไม่หาย แค่ต้องดึงใหม่', 'ล้าง', true))) return;
@@ -1547,7 +1574,7 @@ async function geocode(queries) {
   let results = [];
   try {
     const r = await api('geocode', { queries: queries });
-    results = r.results || [];
+    results = (r.results || []).map((x) => Object.assign({ src: 'google' }, x));
   } catch (err) {
     console.warn('server geocode failed', err);
   }
@@ -1556,12 +1583,245 @@ async function geocode(queries) {
       try {
         const url = 'https://nominatim.openstreetmap.org/search?format=jsonv2&countrycodes=th&accept-language=th&limit=5&q=' + encodeURIComponent(q);
         const list = await fetch(url).then((x) => x.json());
-        results = list.map((x) => ({ label: x.display_name, name: x.name || q, lat: Number(x.lat), lng: Number(x.lon), query: q }));
+        results = list.map((x) => ({ label: x.display_name, name: x.name || q, lat: Number(x.lat), lng: Number(x.lon), query: q, src: 'osm' }));
         if (results.length) break;
       } catch (_) { /* offline */ }
     }
   }
   return results;
+}
+
+/* ---------- Google Maps links ---------- */
+
+const MAPS_LINK_RE = /https?:\/\/(?:maps\.app\.goo\.gl|goo\.gl\/maps|g\.co\/kgs|(?:www\.)?google\.[a-z.]+\/maps|maps\.google\.[a-z.]+)[^\s"'<>]*/i;
+const isMapsLink = (t) => MAPS_LINK_RE.test(String(t || ''));
+
+/** Same rules as parseMapsUrl_ in Code.gs: coordinates straight from a long Google Maps URL. */
+function parseMapsUrl(url) {
+  let u = String(url);
+  try { u = decodeURIComponent(u); } catch (_) { /* keep raw */ }
+  const pm = u.match(/\/maps\/place\/([^/@?]+)/);
+  const name = pm ? pm[1].replace(/\+/g, ' ').trim() : '';
+  const tries = [/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/, /[?&](?:q|query|ll|sll|center|destination|daddr)=(-?\d+\.\d+),\s*\+?(-?\d+\.\d+)/, /\/(?:search|place)\/(-?\d+\.\d+),\s*\+?(-?\d+\.\d+)/];
+  for (const re of tries) {
+    const m = u.match(re);
+    if (m && Math.abs(+m[1]) <= 90 && Math.abs(+m[2]) <= 180) return { lat: +m[1], lng: +m[2], name: name, precise: true };
+  }
+  return null;
+}
+
+/** Text shared from Google Maps is usually "Place name\nhttps://maps.app.goo.gl/…". */
+function nameFromSharedText(text) {
+  const first = String(text || '').replace(MAPS_LINK_RE, '').split('\n').map((x) => x.trim()).filter(Boolean)[0] || '';
+  return first.replace(/^["“]|["”]$/g, '').slice(0, 120);
+}
+
+/** Resolves any Google Maps link (short or long) to {lat, lng, name}. */
+async function resolveMapsLink(text) {
+  const m = String(text || '').match(MAPS_LINK_RE);
+  if (!m) throw new Error('ไม่พบลิงก์ Google Maps');
+  const local = parseMapsUrl(m[0]);
+  let r = local;
+  if (!r) r = await api('resolveMapsUrl', { url: m[0] });
+  const shared = nameFromSharedText(text);
+  return { lat: +r.lat, lng: +r.lng, name: shared || r.name || 'Google Maps', label: r.label || shared || r.name || '', src: 'gmaps', precise: r.precise !== false };
+}
+
+/* ---------- Open Charge Map (free station database) ---------- */
+
+const OCM_TTL = 7 * 86400000;
+let OCM = loadLS('ocm', null); // { at, list: [id, title, addr, lat, lng, operator, maxKW, points][] }
+let ocmLoading = null;
+
+/** Downloads all Thai stations: directly from the browser, or through Apps Script if that fails. */
+async function fetchOcm(key) {
+  const base = 'https://api.openchargemap.io/v3/';
+  try {
+    const q = '&key=' + encodeURIComponent(key);
+    const [pois, ref] = await Promise.all([
+      fetch(base + 'poi/?output=json&countrycode=TH&maxresults=20000&compact=true&verbose=false' + q).then((r) => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }),
+      fetch(base + 'referencedata/?' + q.slice(1)).then((r) => r.json()).catch(() => ({})),
+    ]);
+    const ops = {};
+    (ref.Operators || []).forEach((o) => { ops[o.ID] = o.Title; });
+    return pois.map((p) => {
+      const a = p.AddressInfo || {};
+      const kw = (p.Connections || []).reduce((m, c) => Math.max(m, Number(c.PowerKW) || 0), 0);
+      const addr = [a.AddressLine1, a.AddressLine2, a.Town, a.StateOrProvince].filter(Boolean).join(', ');
+      return [p.ID, a.Title || '', addr, +(+a.Latitude).toFixed(6), +(+a.Longitude).toFixed(6), ops[p.OperatorID] || '', kw, p.NumberOfPoints || 0];
+    }).filter((r) => isFinite(r[3]) && isFinite(r[4]));
+  } catch (err) {
+    console.warn('direct OCM fetch failed, using Apps Script', err);
+    const r = await api('ocmStations', { key: key });
+    return r.stations || [];
+  }
+}
+
+/** Returns the cached station list, refreshing it in the background once a week. */
+function ensureOcm(force) {
+  const key = loadLS('ocmKey', '');
+  if (!key) return Promise.resolve(OCM);
+  const fresh = OCM && Date.now() - OCM.at < OCM_TTL;
+  if (fresh && !force) return Promise.resolve(OCM);
+  if (!ocmLoading) {
+    ocmLoading = fetchOcm(key).then((list) => {
+      OCM = { at: Date.now(), list: list };
+      saveLS('ocm', OCM);
+      return OCM;
+    }).finally(() => { ocmLoading = null; });
+  }
+  return OCM && !force ? Promise.resolve(OCM) : ocmLoading;
+}
+
+// Thai words -> the English spelling Open Charge Map usually uses.
+const OCM_SYN = [
+  ['ปตท', 'ptt'], ['บางจาก', 'bangchak'], ['เชลล์', 'shell'], ['คาลเท็กซ์', 'caltex'], ['ซัสโก้', 'susco'], ['เอสโซ่', 'esso'], ['พีที', 'pt'],
+  ['โลตัส', 'lotus'], ['บิ๊กซี', 'bigc'], ['เซ็นทรัล', 'central'], ['โรบินสัน', 'robinson'], ['แม็คโคร', 'makro'], ['แมคโคร', 'makro'], ['โฮมโปร', 'homepro'],
+  ['เดอะมอลล์', 'themall'], ['ซีคอน', 'seacon'], ['เมกาบางนา', 'megabangna'], ['เทอร์มินอล', 'terminal'], ['ไอคอนสยาม', 'iconsiam'],
+  ['การไฟฟ้าส่วนภูมิภาค', 'pea'], ['การไฟฟ้านครหลวง', 'mea'], ['วอลต้า', 'volta'], ['โฮเว่น', 'hoven'], ['สปาร์ค', 'spark'], ['อีวี', 'ev'],
+  ['มหาวิทยาลัย', 'university'], ['โรงพยาบาล', 'hospital'], ['โรงแรม', 'hotel'], ['คอนโด', 'condo'],
+  ['รามคำแหง', 'ramkhamhaeng'], ['ลาดพร้าว', 'ladprao'], ['บางนา', 'bangna'], ['พระราม', 'rama'], ['ศรีนครินทร์', 'srinakarin'], ['สุขุมวิท', 'sukhumvit'],
+  ['รัชดา', 'ratchada'], ['พหลโยธิน', 'phahonyothin'], ['วิภาวดี', 'vibhavadi'], ['งามวงศ์วาน', 'ngamwongwan'], ['แจ้งวัฒนะ', 'chaengwattana'],
+  ['ร่มเกล้า', 'romklao'], ['มีนบุรี', 'minburi'], ['บางกะปิ', 'bangkapi'], ['ลาดกระบัง', 'latkrabang'], ['อ่อนนุช', 'onnut'], ['ประเวศ', 'prawet'],
+  ['พัฒนาการ', 'phatthanakan'], ['สะพานสูง', 'saphansung'], ['เสรีไทย', 'serithai'], ['นวมินทร์', 'nawamin'], ['รามอินทรา', 'ramintra'],
+  ['บางใหญ่', 'bangyai'], ['นนทบุรี', 'nonthaburi'], ['ปทุมธานี', 'pathumthani'], ['สมุทรปราการ', 'samutprakan'], ['รังสิต', 'rangsit'],
+  ['พัทยา', 'pattaya'], ['ชลบุรี', 'chonburi'], ['เชียงใหม่', 'chiangmai'], ['ภูเก็ต', 'phuket'], ['หัวหิน', 'huahin'], ['กรุงเทพ', 'bangkok'],
+  ['สาขา', ' '], ['สถานีชาร์จ', ' '], ['สถานี', ' '], ['ถนน', ' '], ['ซอย', 'soi'],
+];
+function ocmFold(s) {
+  let t = normalizeThai(s).toLowerCase().replace(/\./g, '');
+  OCM_SYN.forEach(([th, en]) => { if (t.includes(th)) t = t.split(th).join(' ' + en + ' '); });
+  return t.replace(/[^0-9a-z฀-๿]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+function bigrams(s) {
+  const g = new Map();
+  for (let i = 0; i < s.length - 1; i++) { const k = s.slice(i, i + 2); g.set(k, (g.get(k) || 0) + 1); }
+  return g;
+}
+function dice(a, b) {
+  if (a.length < 2 || b.length < 2) return 0;
+  const A = bigrams(a), B = bigrams(b);
+  let hit = 0;
+  A.forEach((n, k) => { hit += Math.min(n, B.get(k) || 0); });
+  return (2 * hit) / (a.length - 1 + b.length - 1);
+}
+const kmBetween = (a, b, c, d) => {
+  const r = Math.PI / 180, x = (d - b) * r * Math.cos(((a + c) / 2) * r), y = (c - a) * r;
+  return Math.sqrt(x * x + y * y) * 6371;
+};
+
+/** Fuzzy search over the cached Open Charge Map stations. */
+function searchOcm(query, app) {
+  if (!OCM || !OCM.list || !OCM.list.length) return [];
+  const q = ocmFold(String(query || '').replace(/pea\s*volta|ร่วมเครือข่าย|#\s*\d+/ig, ' '));
+  const tokens = q.split(' ').filter((t) => t.length >= 2);
+  if (!tokens.length) return [];
+  const qc = q.replace(/ /g, '');
+  const tokLen = tokens.reduce((n, t) => n + t.length, 0);
+  const brand = { 'PEA VOLTA': 'pea', 'Hoven Charge': 'hoven', 'EV Station PluZ': 'pluz', 'Spark': 'spark', 'iGreen+': 'igreen', 'EVolt': 'evolt', 'Altervim Super Charge': 'altervim', 'MEA EV': 'mea', 'Gentari Go': 'gentari', 'OneCharge': 'onecharge', 'ReverSharger': 'bangchak', 'Elexa': 'elexa' }[app];
+  const mine = S.items.filter((i) => isNum(i.lat));
+  const home = mine.length ? { lat: median(mine.map((i) => i.lat)), lng: median(mine.map((i) => i.lng)) } : null;
+  const out = [];
+  for (const r of OCM.list) {
+    if (!r._f) { r._f = ocmFold(r[1] + ' ' + r[5]); r._a = ocmFold(r[2]); r._c = ocmFold(r[1]).replace(/ /g, ''); }
+    const hay = r._f + ' ' + r._a;
+    let hit = 0;
+    for (const t of tokens) if (hay.includes(t)) hit += t.length;
+    let score = Math.max(hit / tokLen, dice(qc, r._c) * 0.9);
+    if (score < 0.34) continue;
+    if (brand && r._f.includes(brand)) score += 0.12;
+    if (home && kmBetween(home.lat, home.lng, r[3], r[4]) < 60) score += 0.06;
+    out.push({ score: score, r: r });
+  }
+  out.sort((a, b) => b.score - a.score);
+  return out.slice(0, 6).filter((x) => x.score >= 0.5).map(({ r, score }) => ({
+    name: r[1], label: [r[2], r[5], r[6] ? r[6] + ' kW' : ''].filter(Boolean).join(' · '), lat: r[3], lng: r[4], src: 'ocm', score: score,
+  }));
+}
+function median(a) { const b = a.slice().sort((x, y) => x - y); return b[Math.floor(b.length / 2)]; }
+
+/* ---------- Leaving for Google Maps and coming back via "Share" ---------- */
+
+/** Remembers what we were locating, so a share from Google Maps can finish the job after a reload. */
+function rememberPendingLocation(opts) {
+  let draft = null;
+  if (F && /^#\/(add|edit)/.test(location.hash)) {
+    draft = Object.assign({}, F, { preview: { receipt: null, car: null }, saving: false, _locT: null });
+    ['receipt', 'car'].forEach((k) => { if (draft.ocr && draft.ocr[k] && draft.ocr[k].status === 'busy') draft.ocr[k] = null; });
+  }
+  saveLS('pendingLoc', { ts: Date.now(), station: opts.station || '', app: opts.app || '', route: location.hash || '#/', draft: draft });
+}
+
+async function consumeSharedLink() {
+  let d = null;
+  try {
+    const cache = await caches.open('share-inbox');
+    const res = await cache.match('shared-text');
+    if (!res) return;
+    d = await res.json();
+    await cache.delete('shared-text');
+  } catch (err) { console.warn('shared text unavailable', err); return; }
+  const text = [d.text, d.url, d.title].filter(Boolean).join('\n');
+  if (!isMapsLink(text)) { toast('ข้อความที่แชร์มาไม่มีลิงก์ Google Maps', true); return; }
+  toast('กำลังอ่านตำแหน่งจาก Google Maps…');
+  let loc;
+  try { loc = await resolveMapsLink(text); } catch (err) { toast(err.message, true); return; }
+  if (!loc.name || loc.name === 'Google Maps') loc.name = (d.title || '').trim() || loc.name;
+  const p = loadLS('pendingLoc', null);
+  localStorage.removeItem('evlog.pendingLoc');
+  if (p && Date.now() - p.ts < 3 * 3600000) {
+    if (p.draft) {
+      F = Object.assign(p.draft, { lat: loc.lat, lng: loc.lng, locSrc: 'gmaps', locLabel: loc.name, geo: null, locSkipped: false });
+      if (location.hash === p.route) route(); else location.hash = p.route;
+      toast('ใส่ตำแหน่งจาก Google Maps แล้ว · กดบันทึกได้เลย');
+      return;
+    }
+    if (p.station) {
+      try {
+        const r = await propagateStationLocation(p.station, p.app, loc.lat, loc.lng);
+        toast('บันทึกตำแหน่ง "' + p.station + '" แล้ว · ' + (r.updated || 0) + ' รายการ');
+      } catch (err) { toast('บันทึกไม่สำเร็จ: ' + err.message, true); }
+      if (location.hash === p.route) route(); else location.hash = p.route;
+      return;
+    }
+  }
+  openAssignLocation(loc);
+}
+
+/** A place came from Google Maps with no context: ask which station it belongs to. */
+function openAssignLocation(loc) {
+  const root = $('#modal-root');
+  const all = stationGroups().slice().sort((a, b) => (isNum(a.lat) - isNum(b.lat)) || (b.visits - a.visits));
+  root.innerHTML = `<div class="picker" role="dialog" aria-modal="true" aria-labelledby="as-t">
+    <div class="picker-hd"><button class="navbtn" id="as-x">ยกเลิก</button><div class="title" id="as-t">ตำแหน่งจาก Google Maps</div><div style="width:60px"></div></div>
+    <div class="picker-list" style="flex-grow:1">
+      <div class="as-place">${icon('pin', '#30D158', 20)}<span><b>${esc(loc.name)}</b><small>${loc.lat.toFixed(5)}, ${loc.lng.toFixed(5)}${loc.precise ? '' : ' · ตำแหน่งโดยประมาณ'}</small></span></div>
+      <button class="primary" id="as-new" style="margin:4px 0 14px">${icon('plus', '#000', 16, 2.6)}บันทึกการชาร์จใหม่ที่นี่</button>
+      <div class="label" style="padding:0 4px 8px">หรือใช้เป็นตำแหน่งของสถานีเดิม</div>
+      ${all.length ? all.map((s, i) => `<button class="ms-row as-row" data-i="${i}">
+        ${logoHtml(s.app, 'logo', 36)}
+        <span style="flex-grow:1;min-width:0;display:flex;flex-direction:column;text-align:left"><b style="overflow-wrap:anywhere">${esc(s.name)}</b><small class="meta">${esc(s.app)} · ${s.visits} ครั้ง</small></span>
+        ${isNum(s.lat) ? '<small class="meta">มีตำแหน่งแล้ว</small>' : '<small style="color:var(--orange)">ยังไม่มี</small>'}
+      </button>`).join('') : '<div class="empty">ยังไม่มีสถานีที่บันทึกไว้</div>'}
+    </div></div>`;
+  $('#as-x').addEventListener('click', () => { root.innerHTML = ''; });
+  $('#as-new').addEventListener('click', () => {
+    F = newForm(null);
+    F._for = 'new';
+    Object.assign(F, { station: loc.name, lat: loc.lat, lng: loc.lng, locSrc: 'gmaps', locLabel: loc.name });
+    root.innerHTML = '';
+    if (location.hash === '#/add') route(); else location.hash = '#/add';
+  });
+  root.querySelectorAll('.as-row').forEach((b) => b.addEventListener('click', async () => {
+    const s = all[Number(b.dataset.i)];
+    if (isNum(s.lat) && !(await confirmBox('แทนตำแหน่งเดิม?', '"' + s.name + '" มีตำแหน่งอยู่แล้ว ต้องการเปลี่ยนเป็นตำแหน่งนี้ไหม', 'เปลี่ยน', false))) return;
+    try {
+      const r = await propagateStationLocation(s.name, s.app, loc.lat, loc.lng, true);
+      toast('บันทึกตำแหน่งแล้ว · ' + (r.updated || 0) + ' รายการ');
+      root.innerHTML = '';
+      route();
+    } catch (err) { toast('บันทึกไม่สำเร็จ: ' + err.message, true); }
+  }));
 }
 
 function knownLocation(station, app) {
@@ -1614,14 +1874,21 @@ function choiceBox(title, text, buttons) {
   });
 }
 
+let closePicker = null;
+/** Removes a Leaflet map safely even while a zoom animation is still running. */
+function killMap(m) {
+  try { m.stop(); m._animatingZoom = false; m.off(); m.remove(); } catch (_) { /* already gone */ }
+}
+
 /**
- * Full-screen picker: search results + map with a draggable pin.
- * Resolves {lat, lng, label} or null when skipped.
+ * Full-screen picker: charging-station database + geocoder results, Google Maps links,
+ * and a map with a draggable pin. Resolves {lat, lng, label} or null when skipped.
  */
 function openLocationPicker(opts) {
   return new Promise((resolve) => {
     const root = $('#modal-root');
     const queries = stationQueries(opts.station, opts.app);
+    const SRC = { ocm: 'สถานีชาร์จ', google: 'Google', osm: 'OSM', gmaps: 'Google Maps' };
     root.innerHTML = `<div class="picker" role="dialog" aria-modal="true" aria-labelledby="pk-t">
       <div class="picker-hd">
         <button class="navbtn" id="pk-skip">ข้าม</button>
@@ -1629,67 +1896,145 @@ function openLocationPicker(opts) {
         <button class="navbtn strong" id="pk-use" disabled>ใช้ตำแหน่งนี้</button>
       </div>
       <div class="picker-search">
-        <div class="search">${icon('search', '#98989F', 18, 2.2)}<label for="pk-q" class="sr-only">ค้นหาสถานี</label>
-          <input id="pk-q" value="${esc(queries[0] || opts.station || '')}" placeholder="ชื่อสถานี ปั๊ม หรือย่าน" autocomplete="off" enterkeyhint="search"></div>
+        <div class="search">${icon('search', '#98989F', 18, 2.2)}<label for="pk-q" class="sr-only">ค้นหาสถานี หรือวางลิงก์ Google Maps</label>
+          <input id="pk-q" value="${esc(queries[0] || opts.station || '')}" placeholder="ชื่อสถานี หรือวางลิงก์ Google Maps" autocomplete="off" enterkeyhint="search"></div>
         <button class="chip" id="pk-go">ค้นหา</button>
+      </div>
+      <div class="pk-gm">
+        <a class="chip gm" id="pk-gmaps" target="_blank" rel="noopener">${icon('map', '#fff', 14, 2.2)}หาใน Google Maps</a>
+        <button class="chip" id="pk-paste">${icon('link', '#fff', 14, 2.2)}วางลิงก์</button>
+        <button class="chip" id="pk-gps" aria-label="ใช้ตำแหน่งปัจจุบัน">${icon('nav', '#fff', 14, 2.2)}ตรงนี้</button>
       </div>
       <div id="pk-map"></div>
       <div class="picker-list" id="pk-list"><div class="loading"><div class="spinner"></div>กำลังค้นหา…</div></div>
-      <div class="picker-foot">
-        <button class="chip" id="pk-gps">${icon('nav', '#fff', 14, 2.2)}ใช้ตำแหน่งปัจจุบัน</button>
-        <span class="meta" style="font-size:12px">ลากหมุดเพื่อขยับให้ตรงได้</span>
-      </div>
+      <div class="picker-foot"><span class="meta" style="font-size:12px">แตะแผนที่หรือลากหมุดเพื่อขยับให้ตรงได้</span></div>
     </div>`;
-    let map = null, marker = null, results = [], chosen = null;
-    const done = (v) => { if (map) map.remove(); root.innerHTML = ''; resolve(v); };
+    let map = null, marker = null, results = [], chosen = null, dots = [], seq = 0, wentToGmaps = false, lastClip = '', closed = false;
+    const onVisible = () => { if (document.visibilityState === 'visible' && wentToGmaps) tryClipboard(true); };
+    const done = (v) => {
+      document.removeEventListener('visibilitychange', onVisible);
+      localStorage.removeItem('evlog.pendingLoc');
+      closed = true;
+      seq++;
+      closePicker = null;
+      if (map) { killMap(map); map = null; }
+      root.innerHTML = '';
+      resolve(v);
+    };
+    closePicker = () => done(null);
     const useBtn = $('#pk-use');
+    const qInput = $('#pk-q');
+    const gmLink = $('#pk-gmaps');
+    const syncGmLink = () => {
+      const v = qInput.value.trim();
+      gmLink.href = 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(isMapsLink(v) ? (opts.station || '') : (v || opts.station || ''));
+    };
+    syncGmLink();
 
     const setChosen = (lat, lng, label, fly) => {
       chosen = { lat: +lat.toFixed(6), lng: +lng.toFixed(6), label: label };
       useBtn.disabled = false;
       if (!map) return;
       if (!marker) {
-        marker = L.marker([lat, lng], { draggable: true, icon: L.divIcon({ className: '', html: '<div class="pk-pin"></div>', iconSize: [30, 30], iconAnchor: [15, 30] }) }).addTo(map);
-        marker.on('dragend', () => { const p = marker.getLatLng(); chosen = { lat: +p.lat.toFixed(6), lng: +p.lng.toFixed(6), label: (chosen && chosen.label ? chosen.label + ' (ปรับตำแหน่ง)' : 'ปักหมุดเอง') }; });
+        marker = L.marker([lat, lng], { draggable: true, zIndexOffset: 1000, icon: L.divIcon({ className: '', html: '<div class="pk-pin"></div>', iconSize: [30, 30], iconAnchor: [15, 30] }) }).addTo(map);
+        marker.on('dragend', () => { const p = marker.getLatLng(); chosen = { lat: +p.lat.toFixed(6), lng: +p.lng.toFixed(6), label: (chosen && chosen.label ? chosen.label.replace(/ \(ปรับตำแหน่ง\)$/, '') + ' (ปรับตำแหน่ง)' : 'ปักหมุดเอง') }; });
       } else marker.setLatLng([lat, lng]);
-      if (fly) map.setView([lat, lng], 16);
+      if (fly) map.setView([lat, lng], 17);
     };
-    const renderList = () => {
+    const pick = (i) => {
+      const r = results[i];
+      if (!r || closed) return;
+      setChosen(r.lat, r.lng, r.name || r.label, true);
+      chosen.i = i;
+      $$('#pk-list .pk-item').forEach((x) => x.classList.toggle('on', Number(x.dataset.i) === i));
+    };
+    const drawDots = () => {
+      if (!map) return;
+      dots.forEach((d) => d.remove());
+      dots = results.map((x, i) => L.circleMarker([x.lat, x.lng], { radius: 7, color: x.src === 'ocm' ? '#30D158' : '#0A84FF', weight: 2, fillOpacity: 0.35 })
+        .on('click', () => pick(i)).addTo(map));
+    };
+    const renderList = (note) => {
       const list = $('#pk-list');
+      const ocmTip = !loadLS('ocmKey', '') ? '<div class="pk-tip">ใส่ Open Charge Map key ในหน้าตั้งค่า เพื่อค้นจากฐานข้อมูลสถานีชาร์จได้แม่นขึ้น</div>' : '';
       if (!results.length) {
-        list.innerHTML = `<div class="empty">ไม่พบตำแหน่ง ลองพิมพ์ชื่อสั้นลง เช่น "บางจาก ทุ่งใหญ่"<br>หรือแตะบนแผนที่เพื่อปักหมุดเอง</div>`;
+        list.innerHTML = `<div class="empty">${note || 'ไม่พบตำแหน่ง'}<br>ลองกด <b>หาใน Google Maps</b> แล้วแชร์หรือคัดลอกลิงก์กลับมา<br>หรือแตะบนแผนที่เพื่อปักหมุดเอง</div>${ocmTip}`;
         return;
       }
       list.innerHTML = results.map((r, i) => `<button class="pk-item ${chosen && chosen.i === i ? 'on' : ''}" data-i="${i}">
-        ${icon('pin', '#30D158', 18)}<span><b>${esc(r.name || r.label.split(',')[0])}</b><small>${esc(r.label)}</small></span></button>`).join('');
-      list.querySelectorAll('.pk-item').forEach((b) => b.addEventListener('click', () => {
-        const r = results[Number(b.dataset.i)];
-        setChosen(r.lat, r.lng, r.name || r.label, true);
-        chosen.i = Number(b.dataset.i);
-        list.querySelectorAll('.pk-item').forEach((x) => x.classList.toggle('on', x === b));
-      }));
+        ${icon('pin', r.src === 'ocm' || r.src === 'gmaps' ? '#30D158' : '#0A84FF', 18)}<span><b>${esc(r.name || r.label.split(',')[0])}</b><small>${esc(r.label)}</small></span><em class="src ${r.src}">${SRC[r.src] || ''}</em></button>`).join('') + ocmTip;
+      list.querySelectorAll('.pk-item').forEach((b) => b.addEventListener('click', () => pick(Number(b.dataset.i))));
     };
-    const search = async (qs) => {
-      $('#pk-list').innerHTML = '<div class="loading"><div class="spinner"></div>กำลังค้นหา…</div>';
-      results = await geocode(qs);
-      renderList();
-      if (results.length) {
-        const r = results[0];
-        setChosen(r.lat, r.lng, r.name || r.label, true);
-        chosen.i = 0;
-        const first = $('#pk-list .pk-item');
-        if (first) first.classList.add('on');
-        if (map && results.length > 1) {
-          results.slice(1).forEach((x) => L.circleMarker([x.lat, x.lng], { radius: 6, color: '#30D158', weight: 2, fillOpacity: 0.3 }).addTo(map));
-        }
+    const showResults = (rs, note) => {
+      if (closed) return;
+      results = rs;
+      chosen = chosen && chosen.i == null ? chosen : null;
+      renderList(note);
+      drawDots();
+      if (results.length) pick(0);
+    };
+
+    const fromLink = async (text) => {
+      const my = ++seq;
+      $('#pk-list').innerHTML = '<div class="loading"><div class="spinner"></div>กำลังอ่านลิงก์ Google Maps…</div>';
+      try {
+        const loc = await resolveMapsLink(text);
+        if (my !== seq) return;
+        if (nameFromSharedText(text) === '' && opts.station) loc.name = loc.name === 'Google Maps' ? opts.station : loc.name;
+        loc.label = (loc.precise ? 'ตำแหน่งจากลิงก์ Google Maps' : 'ตำแหน่งโดยประมาณจากชื่อในลิงก์') + ' · ' + loc.lat.toFixed(5) + ', ' + loc.lng.toFixed(5);
+        showResults([loc]);
+        qInput.value = loc.name;
+        syncGmLink();
+      } catch (err) {
+        if (my === seq) showResults([], esc(err.message));
       }
     };
+    const search = async (qs, raw) => {
+      const my = ++seq;
+      $('#pk-list').innerHTML = '<div class="loading"><div class="spinner"></div>กำลังค้นหา…</div>';
+      await ensureOcm(false).catch(() => null);
+      const ocm = searchOcm(raw || qs[0], opts.app);
+      const geo = await geocode(qs);
+      if (my !== seq) return;
+      const strong = ocm.filter((x) => x.score >= 0.75);
+      const weak = ocm.filter((x) => x.score < 0.75);
+      const seen = new Set();
+      const merged = strong.concat(geo, weak).filter((x) => {
+        const k = x.lat.toFixed(4) + ',' + x.lng.toFixed(4);
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      }).slice(0, 10);
+      showResults(merged);
+    };
+    const go = () => {
+      const v = qInput.value.trim();
+      if (!v) return;
+      if (isMapsLink(v)) fromLink(v);
+      else search(stationQueries(v, opts.app).concat([v]), v);
+    };
+    async function tryClipboard(silent) {
+      if (!navigator.clipboard || !navigator.clipboard.readText) {
+        if (!silent) { qInput.value = ''; qInput.focus(); toast('กดค้างที่ช่องค้นหาแล้วเลือก "วาง"'); }
+        return;
+      }
+      try {
+        const t = await navigator.clipboard.readText();
+        if (isMapsLink(t) && t !== lastClip) { lastClip = t; wentToGmaps = false; fromLink(t); }
+        else if (!silent) toast('ในคลิปบอร์ดยังไม่มีลิงก์ Google Maps', true);
+      } catch (_) {
+        if (!silent) { qInput.value = ''; qInput.focus(); toast('กดค้างที่ช่องค้นหาแล้วเลือก "วาง"'); }
+      }
+    }
 
     $('#pk-skip').addEventListener('click', () => done(null));
     useBtn.addEventListener('click', () => { if (chosen) done({ lat: chosen.lat, lng: chosen.lng, label: chosen.label }); });
-    const go = () => { const v = $('#pk-q').value.trim(); if (v) search(stationQueries(v, opts.app).concat([v])); };
     $('#pk-go').addEventListener('click', go);
-    $('#pk-q').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); go(); } });
+    qInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); go(); } });
+    qInput.addEventListener('input', () => { syncGmLink(); if (isMapsLink(qInput.value)) go(); });
+    gmLink.addEventListener('click', () => { wentToGmaps = true; rememberPendingLocation(opts); });
+    $('#pk-paste').addEventListener('click', () => tryClipboard(false));
+    document.addEventListener('visibilitychange', onVisible);
     $('#pk-gps').addEventListener('click', () => {
       if (!navigator.geolocation) { toast('อุปกรณ์นี้ไม่รองรับตำแหน่ง', true); return; }
       navigator.geolocation.getCurrentPosition((p) => setChosen(p.coords.latitude, p.coords.longitude, 'ตำแหน่งปัจจุบัน', true),
@@ -1700,19 +2045,21 @@ function openLocationPicker(opts) {
       if (!document.getElementById('pk-map')) return;
       map = L.map('pk-map', { zoomControl: false, attributionControl: false }).setView([13.7563, 100.5018], 6);
       L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, className: 'dark-tiles' }).addTo(map);
-      L.control.attribution({ position: 'bottomright', prefix: false }).addAttribution('&copy; OpenStreetMap').addTo(map);
+      L.control.attribution({ position: 'bottomright', prefix: false }).addAttribution('&copy; OpenStreetMap · Open Charge Map').addTo(map);
       map.on('click', (e) => { setChosen(e.latlng.lat, e.latlng.lng, 'ปักหมุดเอง', false); });
       if (isNum(opts.lat)) setChosen(opts.lat, opts.lng, 'ตำแหน่งเดิม', true);
-      if (queries.length) search(queries); else renderList();
-    }).catch((err) => { toast(err.message, true); if (queries.length) search(queries); });
+      drawDots();
+      if (chosen) setChosen(chosen.lat, chosen.lng, chosen.label, true);
+    }).catch((err) => toast(err.message, true));
+    if (queries.length) search(queries, opts.station); else renderList('ใส่ชื่อสถานีเพื่อค้นหา');
   });
 }
 
 /** Saves the location to every record of this station that has none yet. */
-async function propagateStationLocation(station, app, lat, lng) {
-  const r = await api('setStationLocation', { station: station, app: app, lat: lat, lng: lng });
+async function propagateStationLocation(station, app, lat, lng, overwrite) {
+  const r = await api('setStationLocation', { station: station, app: app, lat: lat, lng: lng, overwrite: !!overwrite });
   const k = stationKey(station);
-  S.items.forEach((i) => { if (stationKey(i.station) === k && (!app || i.app === app) && !isNum(i.lat)) { i.lat = lat; i.lng = lng; } });
+  S.items.forEach((i) => { if (stationKey(i.station) === k && (!app || i.app === app) && (overwrite || !isNum(i.lat))) { i.lat = lat; i.lng = lng; } });
   persist();
   return r;
 }
@@ -1987,7 +2334,8 @@ function routeNow() {
   const raw = location.hash.replace(/^#/, '') || '/';
   const [path, qs] = raw.split('?');
   const query = new URLSearchParams(qs || location.search.slice(1));
-  if (mapObj && path !== '/map') { mapObj.remove(); mapObj = null; }
+  if (mapObj && path !== '/map') { killMap(mapObj); mapObj = null; }
+  if (closePicker) closePicker();
   if (!/^\/(add|edit)/.test(path)) F = null;
   $('#modal-root').innerHTML = '';
 
@@ -2013,7 +2361,11 @@ document.addEventListener('visibilitychange', () => {
 
 // Boot
 if (new URLSearchParams(location.search).get('shared') === '1' && !/#\/add/.test(location.hash)) location.hash = '#/add';
+const sharedLink = new URLSearchParams(location.search).get('sharedlink') === '1';
+if (sharedLink) history.replaceState(null, '', location.pathname + (location.hash || '#/'));
 route();
+if (sharedLink && S.cfg.url) consumeSharedLink();
+if (S.cfg.url) setTimeout(() => ensureOcm(false).catch(() => {}), 4000);
 if (S.cfg.url) sync(true);
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
   navigator.serviceWorker.register('sw.js').catch((err) => console.warn('SW registration failed', err));

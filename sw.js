@@ -1,5 +1,5 @@
 /* Service worker: offline app shell + Android share target. */
-const VERSION = 'v1.4.1';
+const VERSION = 'v1.5.0';
 const SHELL = [
   './', 'index.html', 'styles.css', 'app.js', 'parse.js', 'manifest.webmanifest',
   'icons/app-192.png', 'icons/app-512.png',
@@ -32,9 +32,16 @@ self.addEventListener('fetch', (e) => {
       try {
         const form = await e.request.formData();
         const file = form.get('image');
-        if (file) {
-          const cache = await caches.open(SHARE_CACHE);
+        const cache = await caches.open(SHARE_CACHE);
+        if (file && typeof file !== 'string' && file.size) {
           await cache.put('shared-image', new Response(file, { headers: { 'Content-Type': file.type || 'image/jpeg' } }));
+          return Response.redirect('./?shared=1#/add', 303);
+        }
+        // Text / link share (e.g. a place shared from Google Maps).
+        const text = { title: form.get('title') || '', text: form.get('text') || '', url: form.get('url') || '' };
+        if (text.title || text.text || text.url) {
+          await cache.put('shared-text', new Response(JSON.stringify(text), { headers: { 'Content-Type': 'application/json' } }));
+          return Response.redirect('./?sharedlink=1#/map', 303);
         }
       } catch (err) {
         console.error('share-target failed', err);
