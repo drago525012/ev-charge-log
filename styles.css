@@ -423,3 +423,15 @@ a:active, button:active, .photo:active { transform: scale(0.97); }
 .as-row { width: 100%; border: none; color: inherit; font: inherit; margin-bottom: 8px; }
 .pk-item > svg { flex-shrink: 0; }
 .as-row > small { white-space: nowrap; flex-shrink: 0; }
+
+/* v1.5.1 form fixes */
+.badge { white-space: nowrap; flex-shrink: 0; }
+.chip { max-width: 100%; }
+.chip.st span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.chip > svg { flex-shrink: 0; }
+.st-recent { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; padding-top: 12px; border-top: 0.5px solid var(--sep); }
+.locline > svg { flex-shrink: 0; }
+.locline span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.locline .linkbtn { flex-shrink: 0; margin-left: auto; }
+.page { overflow-x: clip; }
+.f .line > label:not(.rem-lb) { white-space: nowrap; }

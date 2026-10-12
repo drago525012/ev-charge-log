@@ -1,7 +1,7 @@
 /* EV Charge Log - PWA frontend (vanilla JS, no build step). */
 'use strict';
 
-const VERSION = '1.5.0';
+const VERSION = '1.5.1';
 
 /* ------------------------------------------------------------------ */
 /* Constants                                                           */
@@ -546,7 +546,7 @@ function drawForm() {
   const sugg = customs.filter((n) => !q || n.toLowerCase().includes(q)).slice(0, 8);
 
   const stations = stationGroups();
-  const forApp = stations.filter((s) => s.app === F.app).slice(0, 5);
+  const forApp = stations.filter((s) => s.app === F.app && isUsableStationName(s.name)).slice(0, 5);
 
   view(`<div class="page form">
     <div class="navbar">
@@ -589,7 +589,7 @@ function drawForm() {
           <div style="flex-grow:1;display:flex;flex-direction:column;gap:2px;min-width:0">
             <label for="f-station" class="label" style="font-size:12px">${F.auto.station ? 'อ่านจากใบเสร็จ · แก้ไขได้' : 'ชื่อสถานี หรือย่านที่ไปชาร์จ'}</label>
             <input id="f-station" list="dl-stations" placeholder="เช่น สาขาลาดพร้าว" value="${esc(F.station)}" autocomplete="off">
-            <datalist id="dl-stations">${stations.map((s) => `<option value="${esc(s.name)}">`).join('')}</datalist>
+            <datalist id="dl-stations">${stations.filter((s) => isUsableStationName(s.name)).map((s) => `<option value="${esc(s.name)}">`).join('')}</datalist>
           </div>
         </div>
         <div class="f" style="border-top:0.5px solid var(--sep)">
@@ -597,8 +597,10 @@ function drawForm() {
           <div class="chips">
             <button class="chip" type="button" id="loc-search">${icon('search', '#fff', 14, 2.2)}ค้นหาตำแหน่ง</button>
             <button class="chip" type="button" id="geo">${icon('nav', '#fff', 14, 2.2)}ใช้ตำแหน่งปัจจุบัน</button>
-            ${forApp.map((s, i) => `<button class="chip" type="button" data-st="${i}">${esc(s.name)}</button>`).join('')}
           </div>
+          ${forApp.length ? `<div class="st-recent"><span class="label">สถานีที่เคยไปกับแอปนี้</span><div class="chips">
+            ${forApp.map((s, i) => `<button class="chip st" type="button" data-st="${i}">${isNum(s.lat) ? icon('pin', '#30D158', 13, 2.4) : ''}<span>${esc(s.name)}</span></button>`).join('')}
+          </div></div>` : ''}
         </div>
       </div>
     </section>
@@ -659,7 +661,21 @@ function bindForm(stations, forApp) {
   bindNum('f-kwh', 'kwh');
   byId('f-date').addEventListener('input', (e) => { F.date = e.target.value; updateHints(); });
   byId('f-time').addEventListener('input', (e) => { F.time = e.target.value; updateHints(); });
-  byId('f-station').addEventListener('input', (e) => {
+  byId('f-station').addEventListener('input', async (e) => {
+    if (isMapsLink(e.target.value)) {
+      // A Google Maps link was pasted into the name field: use it for the location, keep a readable name.
+      const text = e.target.value;
+      e.target.value = '';
+      $('#loc-line').innerHTML = '<div class="locline"><div class="spinner" style="width:14px;height:14px;border-width:2px"></div><span>กำลังอ่านลิงก์ Google Maps…</span></div>';
+      try {
+        const loc = await resolveMapsLink(text);
+        F.station = loc.name && loc.name !== 'Google Maps' ? loc.name : (F.station || '');
+        Object.assign(F, { lat: loc.lat, lng: loc.lng, locSrc: 'gmaps', locLabel: loc.name, geo: null });
+      } catch (err) { toast(err.message, true); }
+      e.target.value = F.station || '';
+      updateLocLine();
+      return;
+    }
     F.station = e.target.value;
     delete F.auto.station;
     clearTimeout(F._locT);
@@ -1824,6 +1840,12 @@ function openAssignLocation(loc) {
   }));
 }
 
+/** Hides junk names (links, OCR labels) from station suggestions. */
+function isUsableStationName(n) {
+  const v = String(n || '').trim();
+  return v.length >= 3 && !/^https?:\/\//i.test(v) && !/^(ที่อยู่|สถานี|address|location|station)\s*:?$/i.test(v);
+}
+
 function knownLocation(station, app) {
   const k = stationKey(station);
   if (!k) return null;
@@ -1845,7 +1867,7 @@ function attachKnownLocation(replaceAuto) {
 
 function locLineHtml() {
   if (isNum(F.lat)) {
-    const lbl = F.locLabel || (F.lat.toFixed(5) + ', ' + F.lng.toFixed(5));
+    const lbl = F.locLabel ? String(F.locLabel).split(/,| แขวง| ตำบล| ต\.| เขต| อำเภอ/)[0].trim() : F.lat.toFixed(5) + ', ' + F.lng.toFixed(5);
     return `<div class="locline ok">${icon('check', 'currentColor', 14, 3)}<span>มีตำแหน่งแล้ว · ${esc(lbl)}${F.geo ? ' (±' + Math.round(F.geo) + ' ม.)' : ''}</span>
       <button type="button" class="linkbtn" id="loc-clear">ล้าง</button></div>`;
   }

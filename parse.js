@@ -341,7 +341,9 @@
     }
     if (!out.date) { const d = findDate(L.text); if (d) out.date = d; }
     const fold = (v) => String(v).replace(/\u0E4D([\u0E48-\u0E4B])\u0E32/g, '$1\u0E33').replace(/\u0E4D\u0E32/g, '\u0E33').replace(/\s+/g, ' ').trim();
+    const junk = (v) => !v || v.length < 3 || /^(ที่อยู่|สถานี|address|location|station)\s*:?$/i.test(v) || /^https?:\/\//i.test(v);
     if (out.station) out.station = fold(out.station);
+    if (junk(out.station)) delete out.station;
     (out.candidates || []).forEach((c) => { if (c.station) c.station = fold(c.station); });
     if (!out.time) {
       // Skip the phone status-bar clock on the first line.
