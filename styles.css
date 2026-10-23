@@ -435,3 +435,34 @@ a:active, button:active, .photo:active { transform: scale(0.97); }
 .locline .linkbtn { flex-shrink: 0; margin-left: auto; }
 .page { overflow-x: clip; }
 .f .line > label:not(.rem-lb) { white-space: nowrap; }
+
+/* v1.6.0 station location sheet (Google Maps link + recorded stations) */
+.pk-body { flex: 1 1 auto; overflow-y: auto; padding: 4px 16px calc(24px + var(--safe-bottom)); display: flex; flex-direction: column; gap: 14px; }
+.pk-for { display: flex; align-items: center; gap: 10px; font-size: 15px; font-weight: 600; padding: 0 4px; }
+.pk-for .logo { width: 22px; height: 22px; border-radius: 6px; }
+.pk-for span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pk-gmcard { background: var(--card); border-radius: 20px; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+.pk-gm-t { display: flex; align-items: center; gap: 8px; font-size: 16px; font-weight: 700; }
+.pk-gmcard p { margin: 0; font-size: 13px; color: var(--text2); line-height: 1.55; }
+.pk-gm-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+.pk-gm-btns .chip.gm { background: rgba(10,132,255,0.22); }
+.pk-res-msg { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text2); }
+.pk-res-msg.warn { color: var(--orange); }
+.pk-place { display: flex; align-items: center; gap: 10px; background: rgba(48,209,88,0.10); border-radius: 14px; padding: 12px; }
+.pk-place > svg { flex-shrink: 0; }
+.pk-place span { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.pk-place b { overflow-wrap: anywhere; }
+.pk-place small { font-size: 12px; color: var(--text2); }
+.pk-grp { display: flex; flex-direction: column; gap: 6px; }
+.pk-grp-hd { display: flex; align-items: center; gap: 8px; padding: 0 4px; font-size: 14px; font-weight: 700; }
+.pk-grp-hd .logo { width: 26px; height: 26px; border-radius: 7px; }
+.pk-grp-hd small { margin-left: auto; color: var(--text2); font-weight: 500; font-size: 12px; }
+.pk-grp-list { background: var(--card); border-radius: 16px; display: flex; flex-direction: column; overflow: hidden; }
+.pk-st { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: none; background: transparent; color: inherit; text-align: left; border-top: 0.5px solid var(--sep); font: inherit; }
+.pk-st:first-child { border-top: none; }
+.pk-st > svg { flex-shrink: 0; }
+.pk-st span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.pk-st b { font-size: 15px; overflow-wrap: anywhere; }
+.pk-st small { font-size: 12px; color: var(--text2); }
+.pk-st:active { background: var(--card2); }
+.pk-st[disabled] { opacity: 0.45; }
