@@ -1,7 +1,7 @@
 /* EV Charge Log - PWA frontend (vanilla JS, no build step). */
 'use strict';
 
-const VERSION = '1.6.0';
+const VERSION = '1.6.1';
 
 /* ------------------------------------------------------------------ */
 /* Constants                                                           */
@@ -1024,7 +1024,7 @@ function renderDetail(id) {
   const peak = peakOf(it.date, it.time);
   const mapUrl = isNum(it.lat) ? `https://www.google.com/maps/search/?api=1&query=${it.lat},${it.lng}` : '';
   const kv = [
-    it.station ? ['สถานี', esc(it.station) + (mapUrl ? ` <a class="link" href="${mapUrl}" target="_blank" rel="noopener">แผนที่</a>` : ` <button class="linkbtn warn" id="fix-loc">ยังไม่มีตำแหน่ง · ค้นหา</button>`)] : null,
+    it.station ? ['สถานี', esc(it.station) + (mapUrl ? ` <a class="link" href="${mapUrl}" target="_blank" rel="noopener">แผนที่</a>` : ` <button class="linkbtn warn" id="fix-loc">ยังไม่มีตำแหน่ง · ค้นหา</button>`) + ` <button class="linkbtn" id="edit-st">แก้ไขสถานี</button>`] : null,
     isNum(it.odo) ? ['เลขไมล์', fmt(it.odo, 0) + ' กม.'] : null,
     trip != null ? ['วิ่งไปจากครั้งก่อน', fmt(trip, 0) + ' กม.'] : null,
     isNum(it.soc) ? ['แบตก่อนชาร์จ', it.soc + '%'] : null,
@@ -1056,6 +1056,10 @@ function renderDetail(id) {
   </div>`);
 
   countUp($('#detail-total'), it.cost, 600);
+  const editSt = $('#edit-st');
+  if (editSt) editSt.addEventListener('click', async () => {
+    if (await openStationEditor({ name: it.station, app: it.app, lat: it.lat, lng: it.lng })) renderDetail(it.id);
+  });
   const fix = $('#fix-loc');
   if (fix) fix.addEventListener('click', async () => {
     const r = await openLocationPicker({ station: it.station, app: it.app });
@@ -1356,8 +1360,9 @@ function renderMap() {
         <div style="display:flex;flex-direction:column;gap:2px;min-width:0"><b style="font-size:17px">${esc(s.name)}</b><span class="meta">${esc(s.app)} · ล่าสุด ${thaiShort(s.last)}</span></div></div>
         <div class="mini"><div><span>ไปมาแล้ว</span><b>${s.visits} ครั้ง</b></div><div><span>เฉลี่ย</span><b>${s.rate != null ? '฿' + fmt(s.rate) : '–'}</b></div><div><span>ใช้ไปรวม</span><b>${money(s.spent).replace(/\.\d\d$/, '')}</b></div></div>
         <div class="btnrow"><a class="btn-w" href="https://www.google.com/maps/dir/?api=1&destination=${s.lat},${s.lng}" target="_blank" rel="noopener">นำทาง</a>
-        <button class="btn-d" id="hist">ประวัติที่นี่</button></div>`;
+        <button class="btn-d" id="hist">ประวัติที่นี่</button><button class="btn-d" id="st-edit" aria-label="แก้ไขสถานี">แก้ไข</button></div>`;
       $('#hist').addEventListener('click', () => { S.search = s.name; location.hash = '#/'; });
+      $('#st-edit').addEventListener('click', async () => { if (await openStationEditor(s)) renderMap(); });
     }
     const pick = () => {
       let list = all.slice();
@@ -1857,6 +1862,94 @@ function openLocationPicker(opts) {
       const g = flat[Number(b.dataset.i)];
       done({ lat: isNum(g.lat) ? +g.lat.toFixed(6) : null, lng: isNum(g.lng) ? +g.lng.toFixed(6) : null, label: g.name, name: g.name, fromList: true });
     }));
+  });
+}
+
+/**
+ * Edit a station everywhere it was used: rename it, or take name + location from a Google Maps link.
+ * Resolves true when something was saved.
+ */
+function openStationEditor(st) {
+  return new Promise((resolve) => {
+    const root = $('#modal-root');
+    const n = S.items.filter((i) => stationKey(i.station) === stationKey(st.name) && i.app === st.app).length;
+    root.innerHTML = `<div class="picker" role="dialog" aria-modal="true" aria-labelledby="se-t">
+      <div class="picker-hd">
+        <button class="navbtn" id="se-x">ยกเลิก</button>
+        <div class="title" id="se-t">แก้ไขสถานี</div>
+        <button class="navbtn strong" id="se-save">บันทึก</button>
+      </div>
+      <div class="pk-body">
+        <div class="pk-for">${logoHtml(st.app, 'logo', 22)}<span>${esc(st.app)} · ใช้ใน ${n} รายการ</span></div>
+        <div class="group"><div class="f"><label for="se-name" class="label">ชื่อสถานี</label>
+          <input id="se-name" class="field-input" value="${esc(st.name)}" autocomplete="off"></div>
+          <div class="f"><span class="label">ตำแหน่ง</span><span id="se-loc" class="meta">${isNum(st.lat) ? st.lat.toFixed(5) + ', ' + st.lng.toFixed(5) : 'ยังไม่มีตำแหน่ง'}</span></div></div>
+        <section class="pk-gmcard">
+          <div class="pk-gm-t">${icon('map', '#64B5FF', 18, 2.2)}ใช้ชื่อและตำแหน่งจาก Google Maps</div>
+          <p>เปิดสถานีนี้ใน Google Maps แล้วคัดลอกลิงก์มาวาง ระบบจะใส่ชื่อและตำแหน่งให้</p>
+          <div class="pk-gm-btns">
+            <a class="chip gm" id="se-gmaps" target="_blank" rel="noopener" href="${isNum(st.lat) ? `https://www.google.com/maps/search/?api=1&query=${st.lat},${st.lng}` : 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(st.name)}">${icon('map', '#fff', 14, 2.2)}เปิด Google Maps</a>
+            <button class="chip" id="se-paste">${icon('link', '#fff', 14, 2.2)}วางลิงก์</button>
+          </div>
+          <label for="se-link" class="sr-only">ลิงก์ Google Maps</label>
+          <input id="se-link" class="field-input" placeholder="หรือวางลิงก์ที่นี่" autocomplete="off" inputmode="url">
+          <div id="se-res"></div>
+        </section>
+        <p class="meta" style="margin:0;padding:0 4px;line-height:1.6">ชื่อและตำแหน่งจะถูกเปลี่ยนในทุกรายการของสถานีนี้ (${esc(st.app)}) ในชีท</p>
+      </div>
+    </div>`;
+    let loc = null, seq = 0, closed = false;
+    const close = (v) => { if (closed) return; closed = true; closePicker = null; root.innerHTML = ''; resolve(v); };
+    closePicker = () => close(false);
+    const res = $('#se-res');
+    const nameInput = $('#se-name');
+    const fromLink = async (text) => {
+      const my = ++seq;
+      res.innerHTML = '<div class="pk-res-msg"><div class="spinner" style="width:16px;height:16px;border-width:2px"></div>กำลังอ่านลิงก์…</div>';
+      try {
+        const r = await resolveMapsLink(text);
+        if (my !== seq || closed) return;
+        loc = r;
+        const nm = r.name && r.name !== 'Google Maps' ? r.name : '';
+        if (nm) nameInput.value = nm;
+        $('#se-loc').textContent = r.lat.toFixed(5) + ', ' + r.lng.toFixed(5) + ' · จาก Google Maps';
+        res.innerHTML = `<div class="pk-place">${icon('check', '#30D158', 18, 3)}<span><b>${esc(nm || 'ได้ตำแหน่งแล้ว')}</b><small>ใส่ชื่อและตำแหน่งให้แล้ว · กดบันทึกด้านบน</small></span></div>`;
+      } catch (err) {
+        if (my === seq && !closed) res.innerHTML = `<div class="pk-res-msg warn">${esc(err.message)}</div>`;
+      }
+    };
+    $('#se-x').addEventListener('click', () => close(false));
+    $('#se-link').addEventListener('input', (e) => { if (isMapsLink(e.target.value)) fromLink(e.target.value); });
+    $('#se-paste').addEventListener('click', async () => {
+      try {
+        const t = await navigator.clipboard.readText();
+        if (isMapsLink(t)) { $('#se-link').value = t.match(MAPS_LINK_RE)[0]; fromLink(t); } else toast('ในคลิปบอร์ดยังไม่มีลิงก์ Google Maps', true);
+      } catch (_) { $('#se-link').focus(); toast('กดค้างที่ช่องแล้วเลือก "วาง"'); }
+    });
+    $('#se-save').addEventListener('click', async () => {
+      const newName = nameInput.value.trim();
+      if (!isUsableStationName(newName)) { toast('กรุณาใส่ชื่อสถานี', true); return; }
+      if (newName === st.name && !loc) { close(false); return; }
+      const btn = $('#se-save');
+      btn.disabled = true;
+      try {
+        const params = { station: st.name, app: st.app, newName: newName };
+        if (loc) { params.lat = loc.lat; params.lng = loc.lng; }
+        const r = await api('renameStation', params);
+        const k = stationKey(st.name);
+        S.items.forEach((i) => {
+          if (stationKey(i.station) !== k || i.app !== st.app) return;
+          i.station = newName;
+          if (loc) { i.lat = loc.lat; i.lng = loc.lng; }
+        });
+        persist();
+        toast('แก้ไขสถานีแล้ว · ' + (r.updated || 0) + ' รายการ');
+        close(true);
+      } catch (err) {
+        btn.disabled = false;
+        toast('บันทึกไม่สำเร็จ: ' + err.message, true);
+      }
+    });
   });
 }
 
